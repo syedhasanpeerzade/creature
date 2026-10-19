@@ -1,0 +1,552 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Skeletal Cursor Creature</title>
+<style>
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+html,
+body {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background:
+        radial-gradient(ellipse at 50% 48%, rgba(19, 29, 40, 0.52), transparent 64%),
+        #080a0f;
+}
+
+canvas {
+    display: block;
+    width: 100vw;
+    height: 100vh;
+    touch-action: none;
+}
+</style>
+</head>
+<body>
+<canvas id="scene" aria-label="Mouse-following skeletal creature"></canvas>
+<script>
+const canvas = document.getElementById("scene");
+const ctx = canvas.getContext("2d");
+const mouse = { x: 0, y: 0 };
+const pathHistory = [];
+const spine = [];
+const ribCount = 50;
+const segmentSpacing = 7.2;
+const cursorGap = 65;
+const historyLength = 1800;
+const legsAt = [5, 11, 17, 23, 29, 35, 41, 46];
+const tailCount = 16;
+let width = 0;
+let height = 0;
+let scale = 1;
+let distanceTravelled = 0;
+let lastPointerMove = 0;
+let lastPointerSpeed = 0;
+let movementEnergy = 0;
+let animationTime = 0;
+let previousFrameTime = 0;
+const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+function resize() {
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const previousWidth = width;
+    const previousHeight = height;
+    width = window.innerWidth;
+    height = window.innerHeight;
+    if (previousWidth && previousHeight) {
+        const shiftX = (width - previousWidth) * 0.5;
+        const shiftY = (height - previousHeight) * 0.5;
+        for (const point of pathHistory) {
+            point.x += shiftX;
+            point.y += shiftY;
+        }
+        mouse.x += shiftX;
+        mouse.y += shiftY;
+    }
+    scale = Math.min(1, (width - 32) / 660, (height - 32) / 320);
+    scale = Math.max(0.12, scale);
+    canvas.width = Math.round(width * dpr);
+    canvas.height = Math.round(height * dpr);
+    canvas.style.width = `${width}px`;
+    canvas.style.height = `${height}px`;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+
+function toWorld(point) {
+    return {
+        x: (point.x - width * 0.5) / scale,
+        y: (point.y - height * 0.5) / scale
+    };
+}
+
+function addPathPoint(x, y) {
+    const last = pathHistory[pathHistory.length - 1];
+    const fromX = last.x;
+    const fromY = last.y;
+    const distance = Math.hypot(x - fromX, y - fromY);
+    mouse.x = x;
+    mouse.y = y;
+    if (distance < 0.25) return;
+
+    const now = performance.now();
+    const elapsed = Math.max(16, now - lastPointerMove);
+    lastPointerSpeed = distance / elapsed * 1000;
+    const steps = Math.max(1, Math.ceil(distance / 4));
+    for (let step = 1; step <= steps; step++) {
+        const amount = step / steps;
+        const point = {
+            x: fromX + (x - fromX) * amount,
+            y: fromY + (y - fromY) * amount
+        };
+        const previous = pathHistory[pathHistory.length - 1];
+        distanceTravelled += Math.hypot(point.x - previous.x, point.y - previous.y);
+        pathHistory.push({ ...point, distance: distanceTravelled });
+    }
+
+    lastPointerMove = now;
+    while (
+        pathHistory.length > 2 &&
+        pathHistory[1].distance < distanceTravelled - historyLength
+    ) {
+        pathHistory.shift();
+    }
+}
+
+function pointBehindCursor(distanceBehind) {
+    const targetDistance = Math.max(0, distanceTravelled - distanceBehind);
+    let low = 0;
+    let high = pathHistory.length - 1;
+    while (low < high) {
+        const middle = Math.floor((low + high) / 2);
+        if (pathHistory[middle].distance < targetDistance) low = middle + 1;
+        else high = middle;
+    }
+
+    const next = pathHistory[low];
+    const previous = pathHistory[Math.max(0, low - 1)];
+    const span = next.distance - previous.distance;
+    const amount = span > 0 ? (targetDistance - previous.distance) / span : 0;
+    return {
+        x: previous.x + (next.x - previous.x) * amount,
+        y: previous.y + (next.y - previous.y) * amount
+    };
+}
+
+function initialize() {
+    resize();
+    const headX = 190;
+    const headScreenX = width * 0.5 + headX * scale;
+    const headScreenY = height * 0.5;
+    mouse.x = headScreenX + cursorGap;
+    mouse.y = headScreenY;
+    distanceTravelled = cursorGap;
+    pathHistory.push({ x: headScreenX, y: headScreenY, distance: 0 });
+    pathHistory.push({ x: mouse.x, y: mouse.y, distance: cursorGap });
+    lastPointerMove = performance.now();
+
+    for (let i = 0; i < ribCount; i++) {
+        const t = i / (ribCount - 1);
+        spine.push({
+            x: headX - i * segmentSpacing,
+            y: -Math.sin(t * Math.PI) * 7
+        });
+    }
+}
+
+window.addEventListener("resize", resize);
+window.addEventListener("pointermove", event => addPathPoint(event.clientX, event.clientY));
+
+function strokeLine(a, b, color, thickness = 0.8, glow = 0) {
+    ctx.beginPath();
+    ctx.moveTo(a.x, a.y);
+    ctx.lineTo(b.x, b.y);
+    ctx.lineWidth = thickness;
+    ctx.strokeStyle = color;
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.shadowColor = glow ? "rgba(157, 220, 255, 0.22)" : "transparent";
+    ctx.shadowBlur = glow * (0.35 + movementEnergy * 0.35);
+    ctx.strokeStyle = "rgba(7, 11, 16, 0.72)";
+    ctx.lineWidth = thickness + 1.15;
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(a.x, a.y);
+    ctx.lineTo(b.x, b.y);
+    ctx.lineWidth = thickness;
+    ctx.strokeStyle = color;
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(a.x, a.y);
+    ctx.lineTo(b.x, b.y);
+    ctx.lineWidth = Math.max(0.28, thickness * 0.24);
+    ctx.strokeStyle = "rgba(255, 248, 229, 0.52)";
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+}
+
+function drawJoint(point, radius = 1.05) {
+    ctx.beginPath();
+    ctx.arc(point.x, point.y, radius, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(194, 207, 215, 0.88)";
+    ctx.shadowColor = "rgba(157, 220, 255, 0.36)";
+    ctx.shadowBlur = 1.8;
+    ctx.fill();
+    ctx.shadowBlur = 0;
+    ctx.beginPath();
+    ctx.arc(point.x - radius * 0.22, point.y - radius * 0.24, radius * 0.32, 0, Math.PI * 2);
+    ctx.fillStyle = "rgba(255, 249, 232, 0.72)";
+    ctx.fill();
+}
+
+function updateSpine(deltaSeconds) {
+    const idleFor = performance.now() - lastPointerMove;
+    const headTarget = toWorld(pointBehindCursor(cursorGap));
+    const head = spine[0];
+    const baseEase = idleFor > 450 ? 0.12 : 0.2 + movementEnergy * 0.06;
+    const ease = reducedMotion
+        ? 1
+        : 1 - Math.pow(1 - baseEase, deltaSeconds * 60);
+    head.x += (headTarget.x - head.x) * ease;
+    head.y += (headTarget.y - head.y) * ease;
+
+    for (let i = 1; i < spine.length; i++) {
+        const previous = spine[i - 1];
+        const point = spine[i];
+        const dx = point.x - previous.x;
+        const dy = point.y - previous.y;
+        const distance = Math.hypot(dx, dy) || 1;
+        point.x = previous.x + dx / distance * segmentSpacing;
+        point.y = previous.y + dy / distance * segmentSpacing;
+    }
+}
+
+function localFrame(index) {
+    const before = spine[Math.max(0, index - 1)];
+    const after = spine[Math.min(spine.length - 1, index + 1)];
+    let dx = before.x - after.x;
+    let dy = before.y - after.y;
+    const length = Math.hypot(dx, dy) || 1;
+    dx /= length;
+    dy /= length;
+    return {
+        tangent: { x: dx, y: dy },
+        normal: { x: -dy, y: dx }
+    };
+}
+
+function drawRib(index) {
+    const point = spine[index];
+    const { tangent, normal } = localFrame(index);
+    const bodyPosition = index / (ribCount - 1);
+    const taper = bodyPosition < 0.78
+        ? 1 - Math.max(0, bodyPosition - 0.52) * 1.05
+        : 0.51 - (bodyPosition - 0.78) * 1.5;
+    const halfWidth = Math.max(2.2, 20.5 * taper);
+    const ribDepth = segmentSpacing * 0.54;
+    const rear = {
+        x: point.x - tangent.x * ribDepth,
+        y: point.y - tangent.y * ribDepth
+    };
+    const left = {
+        x: point.x + normal.x * halfWidth,
+        y: point.y + normal.y * halfWidth
+    };
+    const right = {
+        x: point.x - normal.x * halfWidth,
+        y: point.y - normal.y * halfWidth
+    };
+    const shade = index % 4 === 0 ? 0.84 : 0.66;
+    const color = `rgba(224, 222, 211, ${shade})`;
+    strokeLine(left, rear, color, 1.05, 1.7);
+    strokeLine(rear, right, color, 1.05, 1.7);
+    strokeLine(
+        { x: point.x - tangent.x * 2.2, y: point.y - tangent.y * 2.2 },
+        { x: point.x + tangent.x * 2.1, y: point.y + tangent.y * 2.1 },
+        "rgba(151, 186, 204, 0.56)",
+        0.72,
+        0.7
+    );
+    if (index % 2 === 0) drawJoint(point, 0.82);
+}
+
+function drawStarTip(point, tangent, normal) {
+    const size = 3.3;
+    const tip = { x: point.x + tangent.x * size, y: point.y + tangent.y * size };
+    const forkLeft = {
+        x: point.x - tangent.x * 1.1 + normal.x * 2.3,
+        y: point.y - tangent.y * 1.1 + normal.y * 2.3
+    };
+    const forkRight = {
+        x: point.x - tangent.x * 1.1 - normal.x * 2.3,
+        y: point.y - tangent.y * 1.1 - normal.y * 2.3
+    };
+    strokeLine(point, tip, "rgba(225, 228, 232, 0.8)", 0.75, 1.5);
+    strokeLine(tip, forkLeft, "rgba(225, 228, 232, 0.75)", 0.65, 1.2);
+    strokeLine(tip, forkRight, "rgba(225, 228, 232, 0.75)", 0.65, 1.2);
+}
+
+function drawLeg(index, side, pair) {
+    const base = spine[index];
+    const { tangent, normal } = localFrame(index);
+    const phase = animationTime * 2.1 + pair * Math.PI + (side < 0 ? Math.PI : 0);
+    const legMotion = reducedMotion ? 0 : (0.18 + movementEnergy * 0.82);
+    const step = Math.sin(phase) * 3.2 * legMotion;
+    const lift = Math.max(0, Math.cos(phase)) * 1.8 * legMotion;
+    const bodyPosition = index / (ribCount - 1);
+    const rootWidth = 10.5 * (1 - bodyPosition * 0.52);
+    const hip = {
+        x: base.x + normal.x * side * rootWidth,
+        y: base.y + normal.y * side * rootWidth
+    };
+    const knee = {
+        x: base.x + normal.x * side * 26 + tangent.x * (step - 3),
+        y: base.y + normal.y * side * 26 + tangent.y * (step - 3) - lift
+    };
+    const foot = {
+        x: base.x + normal.x * side * 46 + tangent.x * (step + 5),
+        y: base.y + normal.y * side * 46 + tangent.y * (step + 5) - lift
+    };
+    const color = "rgba(225, 222, 211, 0.84)";
+    strokeLine(hip, knee, color, 1.05, 1.4);
+    strokeLine(knee, foot, color, 0.95, 1.4);
+    drawJoint(hip, 0.95);
+    drawJoint(knee, 1.1);
+    drawStarTip(foot, tangent, normal);
+}
+
+function buildTail() {
+    const tail = [spine[spine.length - 1]];
+    const frameAtRear = localFrame(spine.length - 1);
+    let angle = Math.atan2(-frameAtRear.tangent.y, -frameAtRear.tangent.x);
+    for (let i = 1; i <= tailCount; i++) {
+        const tailWave = reducedMotion ? 0 : Math.sin(animationTime * 1.1 - i * 0.18) * 0.018;
+        angle += 0.025 + tailWave + Math.sin(animationTime * 0.6 + i * 0.23) * 0.009;
+        const previous = tail[i - 1];
+        const length = segmentSpacing * (i < 10 ? 0.9 : 0.78);
+        tail.push({
+            x: previous.x + Math.cos(angle) * length,
+            y: previous.y + Math.sin(angle) * length
+        });
+    }
+    return tail;
+}
+
+function drawTail(tail) {
+    for (let i = 0; i < tail.length - 1; i++) {
+        const point = tail[i];
+        const next = tail[i + 1];
+        const previous = tail[Math.max(0, i - 1)];
+        let dx = next.x - previous.x;
+        let dy = next.y - previous.y;
+        const length = Math.hypot(dx, dy) || 1;
+        dx /= length;
+        dy /= length;
+        const normal = { x: -dy, y: dx };
+        const taper = Math.max(0.8, 3.5 * (1 - i / (tail.length + 1)));
+        const left = { x: point.x + normal.x * taper, y: point.y + normal.y * taper };
+        const right = { x: point.x - normal.x * taper, y: point.y - normal.y * taper };
+        strokeLine(left, right, "rgba(218, 222, 226, 0.65)", 0.72, 1.4);
+        strokeLine(point, next, "rgba(198, 204, 210, 0.42)", 0.65, 0.8);
+        if (i % 3 === 0) drawJoint(point, Math.max(0.65, 0.95 - i * 0.02));
+    }
+
+    const tip = tail[tail.length - 1];
+    const previous = tail[tail.length - 2];
+    let angle = Math.atan2(tip.y - previous.y, tip.x - previous.x);
+    const loop = {
+        x: tip.x + Math.cos(angle + 1.2) * 3.2,
+        y: tip.y + Math.sin(angle + 1.2) * 3.2
+    };
+    strokeLine(tip, loop, "rgba(220, 224, 228, 0.72)", 0.7, 1.2);
+    ctx.beginPath();
+    ctx.arc(loop.x, loop.y, 1.5, 0, Math.PI * 2);
+    ctx.strokeStyle = "rgba(220, 224, 228, 0.72)";
+    ctx.lineWidth = 0.65;
+    ctx.shadowColor = "rgba(225, 230, 235, 0.45)";
+    ctx.shadowBlur = 1.5;
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+}
+
+function drawHead() {
+    const head = spine[0];
+    const { tangent } = localFrame(0);
+    const direction = Math.atan2(tangent.y, tangent.x);
+    const jawMotion = reducedMotion ? 0 : Math.sin(animationTime * 1.5) * 0.38;
+    const pale = "rgba(239, 232, 213, 0.96)";
+    const fine = "rgba(174, 194, 201, 0.82)";
+
+    ctx.save();
+    ctx.translate(head.x, head.y);
+    ctx.rotate(direction);
+
+    const neckDeltaX = spine[1].x - head.x;
+    const neckDeltaY = spine[1].y - head.y;
+    const neck = {
+        x: neckDeltaX * Math.cos(direction) + neckDeltaY * Math.sin(direction),
+        y: -neckDeltaX * Math.sin(direction) + neckDeltaY * Math.cos(direction)
+    };
+    strokeLine({ x: -2.5, y: 0 }, neck, fine, 0.78, 0.8);
+    drawJoint(neck, 0.8);
+
+    ctx.beginPath();
+    ctx.moveTo(-3, 0);
+    ctx.lineTo(1, -5.2);
+    ctx.lineTo(9, -7);
+    ctx.lineTo(16, -5);
+    ctx.lineTo(23, -1.8);
+    ctx.lineTo(25, 0);
+    ctx.lineTo(23, 1.8);
+    ctx.lineTo(16, 5);
+    ctx.lineTo(9, 7);
+    ctx.lineTo(1, 5.2);
+    ctx.closePath();
+    ctx.lineWidth = 0.85;
+    ctx.strokeStyle = pale;
+    ctx.shadowColor = "rgba(157, 220, 255, 0.46)";
+    ctx.shadowBlur = 3.2;
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+
+    for (const side of [-1, 1]) {
+        const socketX = 13.5;
+        const socketY = side * 3.15;
+        ctx.beginPath();
+        ctx.ellipse(socketX, socketY, 3.15, 2.25, side * 0.16, 0, Math.PI * 2);
+        ctx.fillStyle = "rgba(4, 9, 14, 0.96)";
+        ctx.fill();
+        ctx.lineWidth = 0.55;
+        ctx.strokeStyle = "rgba(179, 209, 217, 0.74)";
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(socketX + 0.65, socketY - side * 0.15, 0.72, 0, Math.PI * 2);
+        ctx.fillStyle = "rgba(157, 220, 255, 0.94)";
+        ctx.shadowColor = "rgba(87, 190, 255, 0.85)";
+        ctx.shadowBlur = 5;
+        ctx.fill();
+        ctx.shadowBlur = 0;
+    }
+
+    strokeLine({ x: 0, y: 0 }, { x: 9, y: 0 }, fine, 0.7, 0.7);
+    strokeLine({ x: 9, y: 0 }, { x: 17, y: -2.2 }, fine, 0.65, 0.6);
+    strokeLine({ x: 9, y: 0 }, { x: 17, y: 2.2 }, fine, 0.65, 0.6);
+    drawJoint({ x: 0, y: 0 }, 0.95);
+
+    for (const side of [-1, 1]) {
+        const hinge = { x: 3, y: side * 5 };
+        const jawFront = { x: 36, y: side * (7 + jawMotion) };
+        const jawRear = { x: 7, y: side * (11 + jawMotion) };
+        strokeLine(hinge, jawFront, pale, 1, 1.1);
+        strokeLine(jawFront, jawRear, pale, 0.9, 1);
+        strokeLine(jawRear, hinge, fine, 0.72, 0.7);
+        drawJoint(hinge, 1.15);
+        drawJoint(jawFront, 0.8);
+    }
+
+    for (let i = 0; i < 5; i++) {
+        const x = 11 + i * 4;
+        const baseY = 5.5 + (x - 11) * 0.045;
+        const toothTipY = 9.1 + jawMotion;
+        const halfTooth = 1.15;
+        ctx.beginPath();
+        ctx.moveTo(x - halfTooth, baseY);
+        ctx.lineTo(x, toothTipY);
+        ctx.lineTo(x + halfTooth, baseY + 0.1);
+        ctx.strokeStyle = fine;
+        ctx.lineWidth = 0.62;
+        ctx.lineCap = "round";
+        ctx.lineJoin = "round";
+        ctx.shadowColor = "rgba(230, 235, 240, 0.5)";
+        ctx.shadowBlur = 0.9;
+        ctx.stroke();
+        ctx.shadowBlur = 0;
+    }
+
+    const feelerWave = reducedMotion ? 0 : Math.sin(animationTime * 0.8) * 0.45;
+    for (const side of [-1, 1]) {
+        const root = { x: 16, y: side * 4.2 };
+        const joint = { x: 25, y: side * (7.5 + feelerWave) };
+        const tip = { x: 43, y: side * (7 + feelerWave * 1.3) };
+        ctx.beginPath();
+        ctx.moveTo(root.x, root.y);
+        ctx.quadraticCurveTo(
+            joint.x - 3,
+            joint.y,
+            joint.x,
+            joint.y
+        );
+        ctx.quadraticCurveTo(joint.x + 8, tip.y + side * 1.5, tip.x, tip.y);
+        ctx.lineWidth = 0.72;
+        ctx.strokeStyle = pale;
+        ctx.lineCap = "round";
+        ctx.lineJoin = "round";
+        ctx.shadowColor = "rgba(225, 232, 240, 0.55)";
+        ctx.shadowBlur = 1.6;
+        ctx.stroke();
+        ctx.shadowBlur = 0;
+        drawJoint(root, 0.9);
+        drawJoint(joint, 0.82);
+        drawJoint(tip, 0.72);
+    }
+    ctx.restore();
+}
+
+function drawCreature() {
+    updateSpine(frameDelta);
+    const head = spine[0];
+    const aura = ctx.createRadialGradient(
+        width * 0.5 + head.x * scale,
+        height * 0.5 + head.y * scale,
+        1,
+        width * 0.5 + head.x * scale,
+        height * 0.5 + head.y * scale,
+        52 * scale
+    );
+    aura.addColorStop(0, "rgba(60, 148, 195, 0.09)");
+    aura.addColorStop(1, "rgba(60, 148, 195, 0)");
+    ctx.fillStyle = aura;
+    ctx.fillRect(0, 0, width, height);
+    ctx.save();
+    ctx.translate(width * 0.5, height * 0.5);
+    ctx.scale(scale, scale);
+    for (let i = 1; i < ribCount; i++) drawRib(i);
+    for (let pair = 0; pair < legsAt.length; pair++) {
+        drawLeg(legsAt[pair], -1, pair);
+        drawLeg(legsAt[pair], 1, pair);
+    }
+    drawTail(buildTail());
+    drawHead();
+    ctx.restore();
+}
+
+let frameDelta = 1 / 60;
+
+function animate(timestamp) {
+    const deltaSeconds = previousFrameTime
+        ? Math.min((timestamp - previousFrameTime) / 1000, 0.05)
+        : 1 / 60;
+    previousFrameTime = timestamp;
+    frameDelta = deltaSeconds;
+    if (!reducedMotion) animationTime += deltaSeconds;
+    const idleFor = performance.now() - lastPointerMove;
+    const targetEnergy = idleFor < 180 ? Math.min(1, lastPointerSpeed / 850) : 0;
+    const energyEase = 1 - Math.pow(0.92, deltaSeconds * 60);
+    movementEnergy += (targetEnergy - movementEnergy) * energyEase;
+    lastPointerSpeed *= Math.pow(0.88, deltaSeconds * 60);
+    ctx.clearRect(0, 0, width, height);
+    drawCreature();
+    requestAnimationFrame(animate);
+}
+
+initialize();
+animate();
+</script>
+</body>
+</html>
