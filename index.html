@@ -41,6 +41,8 @@ const ribCount = 50;
 const segmentSpacing = 7.2;
 const cursorGap = 65;
 const historyLength = 1800;
+const maxSpineBend = 0.18;
+const spineClearance = segmentSpacing * 2.35;
 const legsAt = [5, 11, 17, 23, 29, 35, 41, 46];
 const tailCount = 16;
 let width = 0;
@@ -48,11 +50,35 @@ let height = 0;
 let scale = 1;
 let distanceTravelled = 0;
 let lastPointerMove = 0;
-let lastPointerSpeed = 0;
+let gaitDistance = 0;
 let movementEnergy = 0;
+let turnAmount = 0;
+let movementState = "idle";
+let previousTravelDirectionX = 1;
+let previousTravelDirectionY = 0;
 let animationTime = 0;
 let previousFrameTime = 0;
+let headLookAngle = 0;
+let targetHeadLookAngle = 0;
+let lookUntil = 0;
+let nextLookAt = 0;
+let nextBlinkAt = 0;
+let blinkStartedAt = 0;
+let blinkAmount = 0;
+let randomSeed = 0x6d2b79f5;
 const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+function randomValue() {
+    randomSeed |= 0;
+    randomSeed = randomSeed + 0x6d2b79f5 | 0;
+    let value = Math.imul(randomSeed ^ randomSeed >>> 15, 1 | randomSeed);
+    value = value + Math.imul(value ^ value >>> 7, 61 | value) ^ value;
+    return ((value ^ value >>> 14) >>> 0) / 4294967296;
+}
+
+function randomBetween(minimum, maximum) {
+    return minimum + randomValue() * (maximum - minimum);
+}
 
 function resize() {
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -96,8 +122,6 @@ function addPathPoint(x, y) {
     if (distance < 0.25) return;
 
     const now = performance.now();
-    const elapsed = Math.max(16, now - lastPointerMove);
-    lastPointerSpeed = distance / elapsed * 1000;
     const steps = Math.max(1, Math.ceil(distance / 4));
     for (let step = 1; step <= steps; step++) {
         const amount = step / steps;
@@ -150,6 +174,8 @@ function initialize() {
     pathHistory.push({ x: headScreenX, y: headScreenY, distance: 0 });
     pathHistory.push({ x: mouse.x, y: mouse.y, distance: cursorGap });
     lastPointerMove = performance.now();
+    nextLookAt = lastPointerMove + randomBetween(2600, 5200);
+    nextBlinkAt = lastPointerMove + randomBetween(2200, 4600);
 
     for (let i = 0; i < ribCount; i++) {
         const t = i / (ribCount - 1);
@@ -205,25 +231,136 @@ function drawJoint(point, radius = 1.05) {
     ctx.fill();
 }
 
+function normalizeAngle(angle) {
+    return Math.atan2(Math.sin(angle), Math.cos(angle));
+}
+
+function clampAngleAround(reference, angle, limit) {
+    const difference = normalizeAngle(angle - reference);
+    return reference + Math.max(-limit, Math.min(limit, difference));
+}
+
+function pointSegmentDistanceSquared(x, y, start, end) {
+    const dx = end.x - start.x;
+    const dy = end.y - start.y;
+    const lengthSquared = dx * dx + dy * dy;
+    const amount = lengthSquared > 1e-8
+        ? Math.max(0, Math.min(1, ((x - start.x) * dx + (y - start.y) * dy) / lengthSquared))
+        : 0;
+    const nearestX = start.x + dx * amount;
+    const nearestY = start.y + dy * amount;
+    const offsetX = x - nearestX;
+    const offsetY = y - nearestY;
+    return offsetX * offsetX + offsetY * offsetY;
+}
+
+function spineClearanceAt(x, y, index) {
+    let minimumDistanceSquared = Infinity;
+    for (let segment = 0; segment <= index - 4; segment++) {
+        const distanceSquared = pointSegmentDistanceSquared(
+            x,
+            y,
+            spine[segment],
+            spine[segment + 1]
+        );
+        if (distanceSquared < minimumDistanceSquared) minimumDistanceSquared = distanceSquared;
+    }
+    return minimumDistanceSquared;
+}
+
 function updateSpine(deltaSeconds) {
     const idleFor = performance.now() - lastPointerMove;
     const headTarget = toWorld(pointBehindCursor(cursorGap));
     const head = spine[0];
+    const previousHeadX = head.x;
+    const previousHeadY = head.y;
     const baseEase = idleFor > 450 ? 0.12 : 0.2 + movementEnergy * 0.06;
     const ease = reducedMotion
         ? 1
         : 1 - Math.pow(1 - baseEase, deltaSeconds * 60);
     head.x += (headTarget.x - head.x) * ease;
     head.y += (headTarget.y - head.y) * ease;
+    const headTravel = Math.hypot(head.x - previousHeadX, head.y - previousHeadY);
+    gaitDistance += headTravel;
+    const targetEnergy = Math.min(1, headTravel / Math.max(deltaSeconds, 0.001) / 110);
+    const energyRate = targetEnergy > movementEnergy ? 8 : 3.5;
+    movementEnergy += (targetEnergy - movementEnergy) * (1 - Math.exp(-energyRate * deltaSeconds));
+    if (headTravel > 0.015) {
+        const directionX = (head.x - previousHeadX) / headTravel;
+        const directionY = (head.y - previousHeadY) / headTravel;
+        const directionAgreement = directionX * previousTravelDirectionX
+            + directionY * previousTravelDirectionY;
+        if (directionAgreement < 0.82) movementState = "turn";
+        else if (targetEnergy < 0.06) movementState = "decelerate";
+        else movementState = movementEnergy < 0.38 ? "accelerate" : "walk";
+        previousTravelDirectionX = directionX;
+        previousTravelDirectionY = directionY;
+    } else if (movementEnergy > 0.035) {
+        movementState = "decelerate";
+    } else {
+        movementState = "idle";
+    }
+    const targetTurnAmount = movementState === "turn" ? 1 : 0;
+    turnAmount += (targetTurnAmount - turnAmount) * (1 - Math.exp(-5 * deltaSeconds));
 
     for (let i = 1; i < spine.length; i++) {
         const previous = spine[i - 1];
         const point = spine[i];
         const dx = point.x - previous.x;
         const dy = point.y - previous.y;
-        const distance = Math.hypot(dx, dy) || 1;
-        point.x = previous.x + dx / distance * segmentSpacing;
-        point.y = previous.y + dy / distance * segmentSpacing;
+        const distance = Math.hypot(dx, dy);
+        let previousAngle;
+        if (i > 1) {
+            const before = spine[i - 2];
+            previousAngle = Math.atan2(previous.y - before.y, previous.x - before.x);
+        } else if (distance > 1e-6) {
+            previousAngle = Math.atan2(dy, dx);
+        } else {
+            previousAngle = Math.PI;
+        }
+
+        const candidateAngle = distance > 1e-6 && Number.isFinite(distance)
+            ? Math.atan2(dy, dx)
+            : previousAngle;
+        const maxBend = i < 4 ? maxSpineBend * 0.72 : maxSpineBend;
+        const constrainedAngle = clampAngleAround(previousAngle, candidateAngle, maxBend);
+        let bestAngle = constrainedAngle;
+        let bestClearance = spineClearanceAt(
+            previous.x + Math.cos(bestAngle) * segmentSpacing,
+            previous.y + Math.sin(bestAngle) * segmentSpacing,
+            i
+        );
+        const minimumClearanceSquared = spineClearance * spineClearance;
+
+        if (bestClearance < minimumClearanceSquared) {
+            let safeAngle = bestAngle;
+            let safeDifference = Infinity;
+            let hasSafeAngle = false;
+            let safestAngle = bestAngle;
+            let safestClearance = bestClearance;
+            const candidateCount = 12;
+            for (let candidate = 0; candidate <= candidateCount; candidate++) {
+                const angle = previousAngle - maxBend
+                    + 2 * maxBend * candidate / candidateCount;
+                const candidateX = previous.x + Math.cos(angle) * segmentSpacing;
+                const candidateY = previous.y + Math.sin(angle) * segmentSpacing;
+                const clearance = spineClearanceAt(candidateX, candidateY, i);
+                const difference = Math.abs(normalizeAngle(angle - constrainedAngle));
+                if (clearance >= minimumClearanceSquared && difference < safeDifference) {
+                    safeAngle = angle;
+                    safeDifference = difference;
+                    hasSafeAngle = true;
+                }
+                if (clearance > safestClearance) {
+                    safestAngle = angle;
+                    safestClearance = clearance;
+                }
+            }
+            bestAngle = hasSafeAngle ? safeAngle : safestAngle;
+        }
+
+        point.x = previous.x + Math.cos(bestAngle) * segmentSpacing;
+        point.y = previous.y + Math.sin(bestAngle) * segmentSpacing;
     }
 }
 
@@ -248,7 +385,10 @@ function drawRib(index) {
     const taper = bodyPosition < 0.78
         ? 1 - Math.max(0, bodyPosition - 0.52) * 1.05
         : 0.51 - (bodyPosition - 0.78) * 1.5;
-    const halfWidth = Math.max(2.2, 20.5 * taper);
+    const breath = 1 + Math.sin(animationTime * 1.25 + Math.sin(animationTime * 0.31) * 0.3) * 0.012;
+    const gaitFlex = 1 + Math.sin(gaitDistance / 48 * Math.PI * 2 - index * 0.2)
+        * movementEnergy * 0.018;
+    const halfWidth = Math.max(2.2, 20.5 * taper * breath * gaitFlex);
     const ribDepth = segmentSpacing * 0.54;
     const rear = {
         x: point.x - tangent.x * ribDepth,
@@ -295,10 +435,23 @@ function drawStarTip(point, tangent, normal) {
 function drawLeg(index, side, pair) {
     const base = spine[index];
     const { tangent, normal } = localFrame(index);
-    const phase = animationTime * 2.1 + pair * Math.PI + (side < 0 ? Math.PI : 0);
-    const legMotion = reducedMotion ? 0 : (0.18 + movementEnergy * 0.82);
-    const step = Math.sin(phase) * 3.2 * legMotion;
-    const lift = Math.max(0, Math.cos(phase)) * 1.8 * legMotion;
+    const strideLength = 48;
+    const cycle = ((gaitDistance / strideLength + pair * 0.5 + (side < 0 ? 0 : 0.5)) % 1 + 1) % 1;
+    const stanceRatio = 0.64;
+    let step;
+    let lift = 0;
+    if (cycle < stanceRatio) {
+        const stanceProgress = cycle / stanceRatio;
+        step = (0.5 - stanceProgress) * strideLength * 0.52;
+    } else {
+        const swingProgress = (cycle - stanceRatio) / (1 - stanceRatio);
+        const easedSwing = swingProgress * swingProgress * (3 - 2 * swingProgress);
+        step = (-0.5 + easedSwing) * strideLength * 0.52;
+        lift = Math.sin(swingProgress * Math.PI) * 5.5;
+    }
+    const strideScale = 1 - turnAmount * 0.18;
+    step *= movementEnergy * strideScale;
+    lift *= movementEnergy * (1 - turnAmount * 0.12);
     const bodyPosition = index / (ribCount - 1);
     const rootWidth = 10.5 * (1 - bodyPosition * 0.52);
     const hip = {
@@ -326,8 +479,12 @@ function buildTail() {
     const frameAtRear = localFrame(spine.length - 1);
     let angle = Math.atan2(-frameAtRear.tangent.y, -frameAtRear.tangent.x);
     for (let i = 1; i <= tailCount; i++) {
-        const tailWave = reducedMotion ? 0 : Math.sin(animationTime * 1.1 - i * 0.18) * 0.018;
-        angle += 0.025 + tailWave + Math.sin(animationTime * 0.6 + i * 0.23) * 0.009;
+        const idleSway = reducedMotion
+            ? 0
+            : Math.sin(animationTime * 0.48 - i * 0.22) * 0.006 * (1 - movementEnergy);
+        const tailWave = reducedMotion ? 0 : Math.sin(animationTime * 1.1 - i * 0.18) * 0.018 * movementEnergy;
+        angle += 0.025 + idleSway + tailWave
+            + Math.sin(animationTime * 0.6 + i * 0.23) * 0.009 * movementEnergy;
         const previous = tail[i - 1];
         const length = segmentSpacing * (i < 10 ? 0.9 : 0.78);
         tail.push({
@@ -378,7 +535,7 @@ function drawTail(tail) {
 function drawHead() {
     const head = spine[0];
     const { tangent } = localFrame(0);
-    const direction = Math.atan2(tangent.y, tangent.x);
+    const direction = Math.atan2(tangent.y, tangent.x) + headLookAngle;
     const jawMotion = reducedMotion ? 0 : Math.sin(animationTime * 1.5) * 0.38;
     const pale = "rgba(239, 232, 213, 0.96)";
     const fine = "rgba(174, 194, 201, 0.82)";
@@ -418,20 +575,29 @@ function drawHead() {
     for (const side of [-1, 1]) {
         const socketX = 13.5;
         const socketY = side * 3.15;
+        const socketHeight = 2.25 * (1 - blinkAmount * 0.84);
         ctx.beginPath();
-        ctx.ellipse(socketX, socketY, 3.15, 2.25, side * 0.16, 0, Math.PI * 2);
+        ctx.ellipse(socketX, socketY, 3.15, socketHeight, side * 0.16, 0, Math.PI * 2);
         ctx.fillStyle = "rgba(4, 9, 14, 0.96)";
         ctx.fill();
         ctx.lineWidth = 0.55;
         ctx.strokeStyle = "rgba(179, 209, 217, 0.74)";
         ctx.stroke();
         ctx.beginPath();
-        ctx.arc(socketX + 0.65, socketY - side * 0.15, 0.72, 0, Math.PI * 2);
+        ctx.arc(socketX + 0.65, socketY - side * 0.15, 0.72 * (1 - blinkAmount), 0, Math.PI * 2);
         ctx.fillStyle = "rgba(157, 220, 255, 0.94)";
         ctx.shadowColor = "rgba(87, 190, 255, 0.85)";
         ctx.shadowBlur = 5;
         ctx.fill();
         ctx.shadowBlur = 0;
+        if (blinkAmount > 0.05) {
+            ctx.beginPath();
+            ctx.moveTo(socketX - 2.8, socketY);
+            ctx.lineTo(socketX + 2.8, socketY);
+            ctx.lineWidth = 0.9;
+            ctx.strokeStyle = `rgba(239, 232, 213, ${blinkAmount * 0.9})`;
+            ctx.stroke();
+        }
     }
 
     strokeLine({ x: 0, y: 0 }, { x: 9, y: 0 }, fine, 0.7, 0.7);
@@ -528,6 +694,26 @@ function drawCreature() {
 
 let frameDelta = 1 / 60;
 
+function updateIdleBehavior(timestamp, deltaSeconds) {
+    const canLookAround = movementState === "idle" && movementEnergy < 0.04;
+    if (canLookAround && timestamp >= nextLookAt) {
+        targetHeadLookAngle = randomBetween(-0.19, 0.19);
+        lookUntil = timestamp + randomBetween(650, 1500);
+        nextLookAt = lookUntil + randomBetween(2600, 5600);
+    }
+    if (!canLookAround || timestamp >= lookUntil) targetHeadLookAngle = 0;
+    headLookAngle += (targetHeadLookAngle - headLookAngle) * (1 - Math.exp(-3.4 * deltaSeconds));
+
+    if (timestamp >= nextBlinkAt) {
+        blinkStartedAt = timestamp;
+        nextBlinkAt = timestamp + randomBetween(2600, 5900);
+    }
+    const blinkProgress = (timestamp - blinkStartedAt) / 170;
+    blinkAmount = blinkProgress >= 0 && blinkProgress <= 1
+        ? Math.sin(blinkProgress * Math.PI)
+        : 0;
+}
+
 function animate(timestamp) {
     const deltaSeconds = previousFrameTime
         ? Math.min((timestamp - previousFrameTime) / 1000, 0.05)
@@ -535,11 +721,7 @@ function animate(timestamp) {
     previousFrameTime = timestamp;
     frameDelta = deltaSeconds;
     if (!reducedMotion) animationTime += deltaSeconds;
-    const idleFor = performance.now() - lastPointerMove;
-    const targetEnergy = idleFor < 180 ? Math.min(1, lastPointerSpeed / 850) : 0;
-    const energyEase = 1 - Math.pow(0.92, deltaSeconds * 60);
-    movementEnergy += (targetEnergy - movementEnergy) * energyEase;
-    lastPointerSpeed *= Math.pow(0.88, deltaSeconds * 60);
+    updateIdleBehavior(timestamp, deltaSeconds);
     ctx.clearRect(0, 0, width, height);
     drawCreature();
     requestAnimationFrame(animate);
