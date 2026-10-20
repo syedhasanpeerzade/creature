@@ -3,7 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Skeletal Cursor Creature</title>
+<meta name="theme-color" content="#080a0f">
+<title>The Hollow — 3D Skeletal Creature</title>
 <style>
 * {
     box-sizing: border-box;
@@ -16,719 +17,982 @@ body {
     width: 100%;
     height: 100%;
     overflow: hidden;
+    background: #080a0f;
+    color: #e8e5dc;
+    font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+body {
     background:
-        radial-gradient(ellipse at 50% 48%, rgba(19, 29, 40, 0.52), transparent 64%),
+        radial-gradient(ellipse at 50% 46%, rgba(25, 40, 53, 0.54), transparent 62%),
         #080a0f;
 }
 
-canvas {
+#scene {
     display: block;
     width: 100vw;
     height: 100vh;
     touch-action: none;
 }
+
+.interface {
+    position: fixed;
+    z-index: 1;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    padding: clamp(22px, 4vw, 48px);
+    pointer-events: none;
+}
+
+.brand {
+    display: grid;
+    gap: 8px;
+    width: fit-content;
+}
+
+.eyebrow,
+.hint,
+.status {
+    color: rgba(186, 199, 207, 0.66);
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+}
+
+.brand h1 {
+    color: #e9e4d7;
+    font-family: Georgia, "Times New Roman", serif;
+    font-size: clamp(26px, 4vw, 39px);
+    font-weight: 400;
+    letter-spacing: 0.015em;
+}
+
+.footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 20px;
+}
+
+.status {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    letter-spacing: 0.13em;
+}
+
+.status-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: #87d8ee;
+    box-shadow: 0 0 12px rgba(101, 204, 238, 0.8);
+}
+
+.error {
+    position: fixed;
+    z-index: 2;
+    inset: 50% auto auto 50%;
+    width: min(440px, calc(100vw - 40px));
+    padding: 20px 22px;
+    transform: translate(-50%, -50%);
+    border: 1px solid rgba(225, 232, 240, 0.16);
+    border-radius: 12px;
+    background: rgba(9, 13, 19, 0.94);
+    color: #e9e4d7;
+    font-size: 14px;
+    line-height: 1.6;
+    text-align: center;
+}
+
+.error[hidden] {
+    display: none;
+}
+
+@media (max-width: 540px) {
+    .interface {
+        padding: 24px;
+    }
+
+    .hint {
+        max-width: 150px;
+        font-size: 9px;
+        line-height: 1.7;
+        text-align: right;
+    }
+}
 </style>
 </head>
 <body>
-<canvas id="scene" aria-label="Mouse-following skeletal creature"></canvas>
-<script>
-const canvas = document.getElementById("scene");
-const ctx = canvas.getContext("2d");
-const mouse = { x: 0, y: 0 };
-const pathHistory = [];
-const spine = [];
-const ribCount = 50;
-const segmentSpacing = 7.2;
-const cursorGap = 65;
-const historyLength = 1800;
-const maxSpineBend = 0.18;
-const spineClearance = segmentSpacing * 2.35;
-const legsAt = [5, 11, 17, 23, 29, 35, 41, 46];
-const tailCount = 16;
-let width = 0;
-let height = 0;
-let scale = 1;
-let distanceTravelled = 0;
-let lastPointerMove = 0;
-let gaitDistance = 0;
-let movementEnergy = 0;
-let turnAmount = 0;
-let movementState = "idle";
-let previousTravelDirectionX = 1;
-let previousTravelDirectionY = 0;
-let animationTime = 0;
-let previousFrameTime = 0;
-let headLookAngle = 0;
-let targetHeadLookAngle = 0;
-let lookUntil = 0;
-let nextLookAt = 0;
-let nextBlinkAt = 0;
-let blinkStartedAt = 0;
-let blinkAmount = 0;
-let randomSeed = 0x6d2b79f5;
-const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+<canvas id="scene" aria-label="Interactive 3D skeletal creature that follows the pointer"></canvas>
+<main class="interface" aria-hidden="true">
+    <header class="brand">
+        <span class="eyebrow">A small thing from the dark</span>
+        <h1>The Hollow</h1>
+    </header>
+    <footer class="footer">
+        <span class="status"><span class="status-dot"></span><span id="creature-state">Waiting for you</span></span>
+        <span class="hint">Move your cursor to guide it</span>
+    </footer>
+</main>
+<div class="error" id="scene-error" role="alert" hidden></div>
+<script type="module">
+const errorPanel = document.getElementById("scene-error");
 
-function randomValue() {
-    randomSeed |= 0;
-    randomSeed = randomSeed + 0x6d2b79f5 | 0;
-    let value = Math.imul(randomSeed ^ randomSeed >>> 15, 1 | randomSeed);
-    value = value + Math.imul(value ^ value >>> 7, 61 | value) ^ value;
-    return ((value ^ value >>> 14) >>> 0) / 4294967296;
+function showError(message) {
+    errorPanel.textContent = message;
+    errorPanel.hidden = false;
 }
 
-function randomBetween(minimum, maximum) {
-    return minimum + randomValue() * (maximum - minimum);
-}
+try {
+    const THREE = await import("https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js");
+    const canvas = document.getElementById("scene");
+    const stateLabel = document.getElementById("creature-state");
+    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.15;
 
-function resize() {
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    const previousWidth = width;
-    const previousHeight = height;
-    width = window.innerWidth;
-    height = window.innerHeight;
-    if (previousWidth && previousHeight) {
-        const shiftX = (width - previousWidth) * 0.5;
-        const shiftY = (height - previousHeight) * 0.5;
-        for (const point of pathHistory) {
-            point.x += shiftX;
-            point.y += shiftY;
-        }
-        mouse.x += shiftX;
-        mouse.y += shiftY;
+    const scene = new THREE.Scene();
+    scene.fog = new THREE.FogExp2(0x080a0f, 0.018);
+    const camera = new THREE.PerspectiveCamera(36, window.innerWidth / window.innerHeight, 0.1, 100);
+    camera.zoom = 1;
+    camera.updateProjectionMatrix();
+    camera.position.set(-1.4, 6.5, 10.5);
+    camera.lookAt(-1.4, 0, 0);
+    const cameraOffset = new THREE.Vector3(0, 6.5, 10.5);
+    const cameraFocus = new THREE.Vector3(-1.4, 0, 0);
+    const cameraPosition = new THREE.Vector3();
+
+    const boneMaterial = new THREE.MeshStandardMaterial({
+        color: 0x6c5649,
+        metalness: 0.32,
+        roughness: 0.58,
+        emissive: 0x120e0c
+    });
+    const jointMaterial = new THREE.MeshStandardMaterial({
+        color: 0x443832,
+        metalness: 0.28,
+        roughness: 0.62,
+        emissive: 0x100b09
+    });
+    const eyeMaterial = new THREE.MeshStandardMaterial({
+        color: 0x40211a,
+        emissive: 0x000000,
+        emissiveIntensity: 0,
+        metalness: 0.12,
+        roughness: 0.22
+    });
+    const pupilMaterial = new THREE.MeshStandardMaterial({
+        color: 0x080607,
+        roughness: 0.18
+    });
+    const mawMaterial = new THREE.MeshStandardMaterial({
+        color: 0x090607,
+        roughness: 0.9
+    });
+    const fangMaterial = new THREE.MeshStandardMaterial({
+        color: 0xb7a28c,
+        metalness: 0.22,
+        roughness: 0.34
+    });
+    const tailGlowMaterial = new THREE.MeshStandardMaterial({
+        color: 0x71321b,
+        emissive: 0xa84219,
+        emissiveIntensity: 0.58,
+        roughness: 0.38
+    });
+    const antennaGlowMaterial = new THREE.MeshStandardMaterial({
+        color: 0x8a5c38,
+        emissive: 0xc37a3a,
+        emissiveIntensity: 0.5,
+        roughness: 0.34
+    });
+    const skullMaterial = new THREE.MeshStandardMaterial({
+        color: 0x382824,
+        metalness: 0.3,
+        roughness: 0.62,
+        emissive: 0x160706
+    });
+    const fleshMaterial = new THREE.MeshStandardMaterial({
+        color: 0x332321,
+        metalness: 0.12,
+        roughness: 0.72
+    });
+    const armorMaterial = new THREE.MeshPhysicalMaterial({
+        color: 0x34221f,
+        metalness: 0.43,
+        roughness: 0.48,
+        clearcoat: 0.32,
+        clearcoatRoughness: 0.38
+    });
+    const armorHighlightMaterial = new THREE.MeshPhysicalMaterial({
+        color: 0x715347,
+        metalness: 0.48,
+        roughness: 0.42,
+        clearcoat: 0.42,
+        clearcoatRoughness: 0.3
+    });
+
+    scene.add(new THREE.HemisphereLight(0x9bbbd0, 0x11151a, 1.7));
+    const keyLight = new THREE.DirectionalLight(0xd8e8f0, 3.1);
+    keyLight.position.set(2, 8, 5);
+    keyLight.castShadow = true;
+    keyLight.shadow.mapSize.set(1024, 1024);
+    keyLight.shadow.camera.left = -12;
+    keyLight.shadow.camera.right = 12;
+    keyLight.shadow.camera.top = 10;
+    keyLight.shadow.camera.bottom = -10;
+    scene.add(keyLight);
+    const rimLight = new THREE.PointLight(0x9b4032, 7, 18);
+    rimLight.position.set(-3, 2.5, -4);
+    scene.add(rimLight);
+    const antennaLight = new THREE.PointLight(0xc88b4f, 0.62, 2.8, 2);
+
+    const floor = new THREE.Mesh(
+        new THREE.PlaneGeometry(200, 200),
+        new THREE.MeshStandardMaterial({ color: 0x090c11, roughness: 0.92, metalness: 0.08 })
+    );
+    floor.rotation.x = -Math.PI / 2;
+    floor.position.y = -0.84;
+    floor.receiveShadow = true;
+    scene.add(floor);
+    const grid = new THREE.GridHelper(80, 80, 0x283640, 0x18232b);
+    grid.position.y = -0.835;
+    grid.material.transparent = true;
+    grid.material.opacity = 0.2;
+    scene.add(grid);
+
+    const up = new THREE.Vector3(0, 1, 0);
+    const forwardAxis = new THREE.Vector3(1, 0, 0);
+    const worldUp = new THREE.Vector3(0, 1, 0);
+    const raycaster = new THREE.Raycaster();
+    const cursorPlane = new THREE.Plane(worldUp, 0);
+    const cursor = new THREE.Vector2();
+    const cursorWorld = new THREE.Vector3(2.97, 0.22, 0);
+    const hitPoint = new THREE.Vector3();
+    const heading = new THREE.Vector3(1, 0, 0);
+    const pointerDirection = new THREE.Vector3(1, 0, 0);
+    const targetPointerDirection = new THREE.Vector3(1, 0, 0);
+    let lastPointerWorld = cursorWorld.clone();
+    let pointerSeen = false;
+    let previousTime = 0;
+    let gaitDistance = 0;
+    let movementEnergy = 0;
+    let spineLightProgress = 0;
+    let lastPointerMove = 0;
+    let nextBlinkAt = 0;
+    let blinkStartedAt = -1000;
+
+    function makeBone(radius = 0.022, material = boneMaterial) {
+        const mesh = new THREE.Mesh(
+            new THREE.CylinderGeometry(radius * 0.72, radius, 1, 7, 1),
+            material
+        );
+        mesh.castShadow = true;
+        mesh.receiveShadow = true;
+        scene.add(mesh);
+        return mesh;
     }
-    scale = Math.min(1, (width - 32) / 660, (height - 32) / 320);
-    scale = Math.max(0.12, scale);
-    canvas.width = Math.round(width * dpr);
-    canvas.height = Math.round(height * dpr);
-    canvas.style.width = `${width}px`;
-    canvas.style.height = `${height}px`;
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-}
 
-function toWorld(point) {
-    return {
-        x: (point.x - width * 0.5) / scale,
-        y: (point.y - height * 0.5) / scale
-    };
-}
-
-function addPathPoint(x, y) {
-    const last = pathHistory[pathHistory.length - 1];
-    const fromX = last.x;
-    const fromY = last.y;
-    const distance = Math.hypot(x - fromX, y - fromY);
-    mouse.x = x;
-    mouse.y = y;
-    if (distance < 0.25) return;
-
-    const now = performance.now();
-    const steps = Math.max(1, Math.ceil(distance / 4));
-    for (let step = 1; step <= steps; step++) {
-        const amount = step / steps;
-        const point = {
-            x: fromX + (x - fromX) * amount,
-            y: fromY + (y - fromY) * amount
-        };
-        const previous = pathHistory[pathHistory.length - 1];
-        distanceTravelled += Math.hypot(point.x - previous.x, point.y - previous.y);
-        pathHistory.push({ ...point, distance: distanceTravelled });
+    function makeJoint(radius = 0.035) {
+        const mesh = new THREE.Mesh(
+            new THREE.SphereGeometry(radius, 8, 6),
+            jointMaterial
+        );
+        mesh.castShadow = true;
+        scene.add(mesh);
+        return mesh;
     }
 
-    lastPointerMove = now;
-    while (
-        pathHistory.length > 2 &&
-        pathHistory[1].distance < distanceTravelled - historyLength
-    ) {
-        pathHistory.shift();
-    }
-}
-
-function pointBehindCursor(distanceBehind) {
-    const targetDistance = Math.max(0, distanceTravelled - distanceBehind);
-    let low = 0;
-    let high = pathHistory.length - 1;
-    while (low < high) {
-        const middle = Math.floor((low + high) / 2);
-        if (pathHistory[middle].distance < targetDistance) low = middle + 1;
-        else high = middle;
+    function makeOrganicMesh(geometry, material, scale) {
+        const mesh = new THREE.Mesh(geometry, material);
+        mesh.scale.set(...scale);
+        mesh.castShadow = true;
+        mesh.receiveShadow = true;
+        scene.add(mesh);
+        return mesh;
     }
 
-    const next = pathHistory[low];
-    const previous = pathHistory[Math.max(0, low - 1)];
-    const span = next.distance - previous.distance;
-    const amount = span > 0 ? (targetDistance - previous.distance) / span : 0;
-    return {
-        x: previous.x + (next.x - previous.x) * amount,
-        y: previous.y + (next.y - previous.y) * amount
-    };
-}
+    function makeSpike(radius) {
+        const mesh = new THREE.Mesh(
+            new THREE.ConeGeometry(radius, 1, 7),
+            armorHighlightMaterial
+        );
+        mesh.castShadow = true;
+        mesh.receiveShadow = true;
+        scene.add(mesh);
+        return mesh;
+    }
 
-function initialize() {
-    resize();
-    const headX = 190;
-    const headScreenX = width * 0.5 + headX * scale;
-    const headScreenY = height * 0.5;
-    mouse.x = headScreenX + cursorGap;
-    mouse.y = headScreenY;
-    distanceTravelled = cursorGap;
-    pathHistory.push({ x: headScreenX, y: headScreenY, distance: 0 });
-    pathHistory.push({ x: mouse.x, y: mouse.y, distance: cursorGap });
-    lastPointerMove = performance.now();
-    nextLookAt = lastPointerMove + randomBetween(2600, 5200);
-    nextBlinkAt = lastPointerMove + randomBetween(2200, 4600);
+    function makeHeadSpike(start, end, radius, material = armorHighlightMaterial) {
+        const direction = end.clone().sub(start);
+        const mesh = new THREE.Mesh(
+            new THREE.ConeGeometry(radius, direction.length(), 7),
+            material
+        );
+        mesh.position.copy(start).add(end).multiplyScalar(0.5);
+        mesh.quaternion.setFromUnitVectors(up, direction.normalize());
+        mesh.castShadow = true;
+        mesh.receiveShadow = true;
+        head.add(mesh);
+        return mesh;
+    }
 
-    for (let i = 0; i < ribCount; i++) {
-        const t = i / (ribCount - 1);
-        spine.push({
-            x: headX - i * segmentSpacing,
-            y: -Math.sin(t * Math.PI) * 7
+    function placeBone(mesh, start, end) {
+        const direction = end.clone().sub(start);
+        const length = direction.length();
+        mesh.position.copy(start).add(end).multiplyScalar(0.5);
+        mesh.scale.set(1, Math.max(length, 0.001), 1);
+        mesh.quaternion.setFromUnitVectors(up, direction.normalize());
+    }
+
+    function pointSegmentDistanceSquaredXZ(point, start, end) {
+        const dx = end.x - start.x;
+        const dz = end.z - start.z;
+        const lengthSquared = dx * dx + dz * dz;
+        const amount = lengthSquared > 1e-8
+            ? Math.max(0, Math.min(1, ((point.x - start.x) * dx + (point.z - start.z) * dz) / lengthSquared))
+            : 0;
+        const nearestX = start.x + dx * amount;
+        const nearestZ = start.z + dz * amount;
+        const offsetX = point.x - nearestX;
+        const offsetZ = point.z - nearestZ;
+        return offsetX * offsetX + offsetZ * offsetZ;
+    }
+
+    const ribCount = 50;
+    const segmentSpacing = 0.13;
+    const spineClearance = 0.78;
+    const spine = Array.from({ length: ribCount }, (_, index) =>
+        new THREE.Vector3(2.25 - index * segmentSpacing, 0.22, 0)
+    );
+    const spineBones = Array.from({ length: ribCount - 1 }, () => makeBone(0.018));
+    const spineJoints = spine.map(() => makeJoint(0.023));
+    const bodySections = [];
+    const organicGeometry = new THREE.SphereGeometry(1, 12, 10);
+    const armorGeometry = new THREE.IcosahedronGeometry(1, 1);
+    const shieldShape = new THREE.Shape();
+    shieldShape.moveTo(0.27, 0);
+    shieldShape.quadraticCurveTo(0.13, 0.13, -0.1, 0.15);
+    shieldShape.lineTo(-0.3, 0.07);
+    shieldShape.quadraticCurveTo(-0.38, 0, -0.3, -0.07);
+    shieldShape.lineTo(-0.1, -0.15);
+    shieldShape.quadraticCurveTo(0.13, -0.13, 0.27, 0);
+    const shieldGeometry = new THREE.ExtrudeGeometry(shieldShape, {
+        depth: 0.055,
+        bevelEnabled: true,
+        bevelSegments: 2,
+        steps: 1,
+        bevelSize: 0.025,
+        bevelThickness: 0.025
+    });
+    shieldGeometry.translate(0, 0, -0.0275);
+    for (let index = 2; index < ribCount - 3; index += 2) {
+        const taper = 1 - Math.max(0, index / ribCount - 0.58) * 1.35;
+        bodySections.push({
+            index,
+            flesh: makeOrganicMesh(organicGeometry, fleshMaterial, [0.22, 0.23 * taper, 0.38 * taper]),
+            dorsal: makeOrganicMesh(armorGeometry, armorHighlightMaterial.clone(), [0.24, 0.12 * taper, 0.3 * taper]),
+            sidePlates: [-1, 1].map(() => {
+                const plate = new THREE.Mesh(shieldGeometry, armorHighlightMaterial);
+                plate.castShadow = true;
+                plate.receiveShadow = true;
+                scene.add(plate);
+                return plate;
+            }),
+            sideScales: [-1, 1].map(() => {
+                const scale = new THREE.Mesh(shieldGeometry, armorMaterial);
+                scale.castShadow = true;
+                scale.receiveShadow = true;
+                scene.add(scale);
+                return scale;
+            }),
+            spine: makeSpike(0.09 * taper)
         });
     }
-}
 
-window.addEventListener("resize", resize);
-window.addEventListener("pointermove", event => addPathPoint(event.clientX, event.clientY));
+    const ribs = spine.filter((_, index) => index % 2 === 0).map((_, ribIndex) => ({
+        index: ribIndex * 2,
+        sides: [-1, 1].map(() => ({
+            upper: makeBone(0.011),
+            lower: makeBone(0.012),
+            joint: makeJoint(0.019)
+        })),
+        crossbar: ribIndex % 3 === 0 ? makeBone(0.008) : null
+    }));
 
-function strokeLine(a, b, color, thickness = 0.8, glow = 0) {
-    ctx.beginPath();
-    ctx.moveTo(a.x, a.y);
-    ctx.lineTo(b.x, b.y);
-    ctx.lineWidth = thickness;
-    ctx.strokeStyle = color;
-    ctx.lineCap = "round";
-    ctx.lineJoin = "round";
-    ctx.shadowColor = glow ? "rgba(157, 220, 255, 0.22)" : "transparent";
-    ctx.shadowBlur = glow * (0.35 + movementEnergy * 0.35);
-    ctx.strokeStyle = "rgba(7, 11, 16, 0.72)";
-    ctx.lineWidth = thickness + 1.15;
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.moveTo(a.x, a.y);
-    ctx.lineTo(b.x, b.y);
-    ctx.lineWidth = thickness;
-    ctx.strokeStyle = color;
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.moveTo(a.x, a.y);
-    ctx.lineTo(b.x, b.y);
-    ctx.lineWidth = Math.max(0.28, thickness * 0.24);
-    ctx.strokeStyle = "rgba(255, 248, 229, 0.52)";
-    ctx.stroke();
-    ctx.shadowBlur = 0;
-}
-
-function drawJoint(point, radius = 1.05) {
-    ctx.beginPath();
-    ctx.arc(point.x, point.y, radius, 0, Math.PI * 2);
-    ctx.fillStyle = "rgba(194, 207, 215, 0.88)";
-    ctx.shadowColor = "rgba(157, 220, 255, 0.36)";
-    ctx.shadowBlur = 1.8;
-    ctx.fill();
-    ctx.shadowBlur = 0;
-    ctx.beginPath();
-    ctx.arc(point.x - radius * 0.22, point.y - radius * 0.24, radius * 0.32, 0, Math.PI * 2);
-    ctx.fillStyle = "rgba(255, 249, 232, 0.72)";
-    ctx.fill();
-}
-
-function normalizeAngle(angle) {
-    return Math.atan2(Math.sin(angle), Math.cos(angle));
-}
-
-function clampAngleAround(reference, angle, limit) {
-    const difference = normalizeAngle(angle - reference);
-    return reference + Math.max(-limit, Math.min(limit, difference));
-}
-
-function pointSegmentDistanceSquared(x, y, start, end) {
-    const dx = end.x - start.x;
-    const dy = end.y - start.y;
-    const lengthSquared = dx * dx + dy * dy;
-    const amount = lengthSquared > 1e-8
-        ? Math.max(0, Math.min(1, ((x - start.x) * dx + (y - start.y) * dy) / lengthSquared))
-        : 0;
-    const nearestX = start.x + dx * amount;
-    const nearestY = start.y + dy * amount;
-    const offsetX = x - nearestX;
-    const offsetY = y - nearestY;
-    return offsetX * offsetX + offsetY * offsetY;
-}
-
-function spineClearanceAt(x, y, index) {
-    let minimumDistanceSquared = Infinity;
-    for (let segment = 0; segment <= index - 4; segment++) {
-        const distanceSquared = pointSegmentDistanceSquared(
-            x,
-            y,
-            spine[segment],
-            spine[segment + 1]
-        );
-        if (distanceSquared < minimumDistanceSquared) minimumDistanceSquared = distanceSquared;
-    }
-    return minimumDistanceSquared;
-}
-
-function updateSpine(deltaSeconds) {
-    const idleFor = performance.now() - lastPointerMove;
-    const headTarget = toWorld(pointBehindCursor(cursorGap));
-    const head = spine[0];
-    const previousHeadX = head.x;
-    const previousHeadY = head.y;
-    const baseEase = idleFor > 450 ? 0.12 : 0.2 + movementEnergy * 0.06;
-    const ease = reducedMotion
-        ? 1
-        : 1 - Math.pow(1 - baseEase, deltaSeconds * 60);
-    head.x += (headTarget.x - head.x) * ease;
-    head.y += (headTarget.y - head.y) * ease;
-    const headTravel = Math.hypot(head.x - previousHeadX, head.y - previousHeadY);
-    gaitDistance += headTravel;
-    const targetEnergy = Math.min(1, headTravel / Math.max(deltaSeconds, 0.001) / 110);
-    const energyRate = targetEnergy > movementEnergy ? 8 : 3.5;
-    movementEnergy += (targetEnergy - movementEnergy) * (1 - Math.exp(-energyRate * deltaSeconds));
-    if (headTravel > 0.015) {
-        const directionX = (head.x - previousHeadX) / headTravel;
-        const directionY = (head.y - previousHeadY) / headTravel;
-        const directionAgreement = directionX * previousTravelDirectionX
-            + directionY * previousTravelDirectionY;
-        if (directionAgreement < 0.82) movementState = "turn";
-        else if (targetEnergy < 0.06) movementState = "decelerate";
-        else movementState = movementEnergy < 0.38 ? "accelerate" : "walk";
-        previousTravelDirectionX = directionX;
-        previousTravelDirectionY = directionY;
-    } else if (movementEnergy > 0.035) {
-        movementState = "decelerate";
-    } else {
-        movementState = "idle";
-    }
-    const targetTurnAmount = movementState === "turn" ? 1 : 0;
-    turnAmount += (targetTurnAmount - turnAmount) * (1 - Math.exp(-5 * deltaSeconds));
-
-    for (let i = 1; i < spine.length; i++) {
-        const previous = spine[i - 1];
-        const point = spine[i];
-        const dx = point.x - previous.x;
-        const dy = point.y - previous.y;
-        const distance = Math.hypot(dx, dy);
-        let previousAngle;
-        if (i > 1) {
-            const before = spine[i - 2];
-            previousAngle = Math.atan2(previous.y - before.y, previous.x - before.x);
-        } else if (distance > 1e-6) {
-            previousAngle = Math.atan2(dy, dx);
-        } else {
-            previousAngle = Math.PI;
+    const legsAt = [5, 11, 17, 23, 29, 35, 41, 46];
+    const legs = [];
+    for (let pair = 0; pair < legsAt.length; pair++) {
+        for (const side of [-1, 1]) {
+            legs.push({
+                index: legsAt[pair],
+                pair,
+                side,
+                coxa: makeBone(0.034, armorMaterial),
+                upper: makeBone(0.031, armorMaterial),
+                lower: makeBone(0.023, boneMaterial),
+                hip: makeJoint(0.04),
+                knee: makeJoint(0.047),
+                foot: makeJoint(0.027),
+                toes: [makeBone(0.016, armorHighlightMaterial), makeBone(0.016, armorHighlightMaterial), makeBone(0.016, armorHighlightMaterial)]
+            });
         }
+    }
 
-        const candidateAngle = distance > 1e-6 && Number.isFinite(distance)
-            ? Math.atan2(dy, dx)
-            : previousAngle;
-        const maxBend = i < 4 ? maxSpineBend * 0.72 : maxSpineBend;
-        const constrainedAngle = clampAngleAround(previousAngle, candidateAngle, maxBend);
-        let bestAngle = constrainedAngle;
-        let bestClearance = spineClearanceAt(
-            previous.x + Math.cos(bestAngle) * segmentSpacing,
-            previous.y + Math.sin(bestAngle) * segmentSpacing,
-            i
+    const tailCount = 16;
+    const tailPoints = Array.from({ length: tailCount + 1 }, (_, index) =>
+        new THREE.Vector3(2.25 - (ribCount - 1) * segmentSpacing - index * 0.105, 0.22, 0)
+    );
+    const tailBones = Array.from({ length: tailCount }, (_, index) =>
+        makeBone(0.014 * (1 - index / (tailCount + 2)))
+    );
+    const tailJoints = tailPoints.slice(0, -1).map((_, index) => makeJoint(0.02 * (1 - index / (tailCount + 2))));
+    const tailSections = Array.from({ length: tailCount - 2 }, (_, index) => {
+        const taper = 1 - (index + 1) / (tailCount + 1);
+        return {
+            index: index + 1,
+            flesh: makeOrganicMesh(organicGeometry, fleshMaterial, [0.09 * taper, 0.095 * taper, 0.15 * taper]),
+            plate: makeOrganicMesh(armorGeometry, armorMaterial, [0.095 * taper, 0.045 * taper, 0.15 * taper]),
+            spine: makeSpike(0.05 * taper)
+        };
+    });
+    const tailLanterns = [2, 4, 6, 8, 10, 12, 14].map(index => {
+        const taper = 1 - index / (tailCount + 1);
+        const lantern = new THREE.Mesh(
+            new THREE.SphereGeometry(Math.max(0.022, 0.058 * taper), 10, 8),
+            tailGlowMaterial
         );
-        const minimumClearanceSquared = spineClearance * spineClearance;
+        lantern.scale.set(1.25, 0.65, 1);
+        scene.add(lantern);
+        return { index, mesh: lantern };
+    });
+    const tailLight = new THREE.PointLight(0xc84c20, 1, 3.2, 2);
+    scene.add(tailLight);
+    const travelingSpineLight = new THREE.PointLight(0xc77a45, 1.05, 3.1, 2);
+    scene.add(travelingSpineLight);
 
-        if (bestClearance < minimumClearanceSquared) {
-            let safeAngle = bestAngle;
-            let safeDifference = Infinity;
-            let hasSafeAngle = false;
-            let safestAngle = bestAngle;
-            let safestClearance = bestClearance;
-            const candidateCount = 12;
-            for (let candidate = 0; candidate <= candidateCount; candidate++) {
-                const angle = previousAngle - maxBend
-                    + 2 * maxBend * candidate / candidateCount;
-                const candidateX = previous.x + Math.cos(angle) * segmentSpacing;
-                const candidateY = previous.y + Math.sin(angle) * segmentSpacing;
-                const clearance = spineClearanceAt(candidateX, candidateY, i);
-                const difference = Math.abs(normalizeAngle(angle - constrainedAngle));
-                if (clearance >= minimumClearanceSquared && difference < safeDifference) {
-                    safeAngle = angle;
-                    safeDifference = difference;
-                    hasSafeAngle = true;
-                }
-                if (clearance > safestClearance) {
-                    safestAngle = angle;
-                    safestClearance = clearance;
+    const head = new THREE.Group();
+    scene.add(head);
+    head.add(antennaLight);
+    const skull = new THREE.Mesh(new THREE.IcosahedronGeometry(0.35, 1), skullMaterial);
+    skull.position.set(0.19, 0.08, 0);
+    skull.scale.set(1.45, 0.72, 0.82);
+    skull.castShadow = true;
+    head.add(skull);
+    const snout = new THREE.Mesh(new THREE.ConeGeometry(0.24, 0.72, 6), armorMaterial);
+    snout.position.set(0.42, 0.01, 0);
+    snout.rotation.z = -Math.PI / 2;
+    snout.scale.set(1, 0.78, 0.88);
+    snout.castShadow = true;
+    head.add(snout);
+    const maw = new THREE.Mesh(new THREE.SphereGeometry(0.2, 12, 8), mawMaterial);
+    maw.position.set(0.39, -0.125, 0);
+    maw.scale.set(1.55, 0.46, 0.8);
+    head.add(maw);
+    const browPlates = [
+        [0.22, 0.29, 0, [0.32, 0.075, 0.23]],
+        [0.39, 0.19, -0.18, [0.2, 0.08, 0.11]],
+        [0.39, 0.19, 0.18, [0.2, 0.08, 0.11]]
+    ].map(([x, y, z, scale]) => {
+        const plate = new THREE.Mesh(armorGeometry, armorHighlightMaterial);
+        plate.position.set(x, y, z);
+        plate.scale.set(...scale);
+        plate.castShadow = true;
+        head.add(plate);
+        return plate;
+    });
+
+    const eyeSockets = [];
+    const eyes = [];
+    const eyeGeometry = new THREE.SphereGeometry(0.057, 14, 10);
+    const socketGeometry = new THREE.TorusGeometry(0.084, 0.022, 7, 16);
+    const pupils = [];
+    for (const side of [-1, 1]) {
+        const socket = new THREE.Mesh(socketGeometry, armorMaterial);
+        socket.position.set(0.24, 0.12, side * 0.255);
+        if (side < 0) socket.rotation.y = Math.PI;
+        head.add(socket);
+        eyeSockets.push(socket);
+        const eye = new THREE.Mesh(eyeGeometry, eyeMaterial);
+        eye.position.set(0.25, 0.12, side * 0.27);
+        head.add(eye);
+        eyes.push(eye);
+        const pupil = new THREE.Mesh(new THREE.SphereGeometry(0.018, 8, 8), pupilMaterial);
+        pupil.position.set(0.278, 0.12, side * 0.298);
+        pupil.scale.set(0.62, 1.5, 0.6);
+        head.add(pupil);
+        pupils.push(pupil);
+    }
+    for (const side of [-1, 1]) {
+        const smallerEye = new THREE.Mesh(
+            new THREE.SphereGeometry(0.028, 10, 8),
+            eyeMaterial
+        );
+        smallerEye.position.set(0.47, 0.19, side * 0.17);
+        head.add(smallerEye);
+        eyes.push(smallerEye);
+    }
+    const headSpikes = [
+        makeHeadSpike(new THREE.Vector3(0.04, 0.26, -0.16), new THREE.Vector3(-0.28, 0.68, -0.2), 0.13),
+        makeHeadSpike(new THREE.Vector3(0.04, 0.26, 0.16), new THREE.Vector3(-0.28, 0.68, 0.2), 0.13),
+        makeHeadSpike(new THREE.Vector3(-0.04, 0.24, 0), new THREE.Vector3(-0.52, 0.55, 0), 0.105),
+        makeHeadSpike(new THREE.Vector3(0.08, -0.11, -0.2), new THREE.Vector3(0.57, -0.35, -0.31), 0.08),
+        makeHeadSpike(new THREE.Vector3(0.08, -0.11, 0.2), new THREE.Vector3(0.57, -0.35, 0.31), 0.08)
+    ];
+    const fangs = [
+        [-1, 0.26], [-1, 0.43], [1, 0.26], [1, 0.43]
+    ].map(([side, x]) => {
+        const fang = new THREE.Mesh(new THREE.ConeGeometry(0.036, 0.18, 7), fangMaterial);
+        fang.position.set(x, -0.16, side * 0.13);
+        fang.rotation.z = Math.PI;
+        fang.castShadow = true;
+        head.add(fang);
+        return fang;
+    });
+
+    const headBones = [
+        makeBone(0.017), makeBone(0.017),
+        makeBone(0.014), makeBone(0.014),
+        makeBone(0.012), makeBone(0.012),
+        makeBone(0.009), makeBone(0.009)
+    ];
+    const headJoints = Array.from({ length: 6 }, () => makeJoint(0.022));
+    const antennaBones = Array.from({ length: 6 }, () => makeBone(0.009, armorHighlightMaterial));
+    const antennaJoints = Array.from({ length: 6 }, () => makeJoint(0.016));
+    const antennaTips = [-1, 1].map(side => {
+        const tip = new THREE.Mesh(
+            new THREE.SphereGeometry(0.05, 12, 10),
+            antennaGlowMaterial
+        );
+        tip.scale.set(0.72, 0.72, 1.1);
+        head.add(tip);
+        return { side, mesh: tip };
+    });
+    head.add(...headBones, ...headJoints, ...antennaBones, ...antennaJoints);
+
+    function setHeadPose(time, blink) {
+        head.position.copy(spine[0]);
+        head.position.y += Math.sin(gaitDistance * 5.2) * movementEnergy * 0.025;
+        head.quaternion.setFromUnitVectors(forwardAxis, heading);
+        if (!reducedMotion) {
+            const nod = Math.sin(gaitDistance * 5.2) * 0.045 * movementEnergy;
+            head.quaternion.multiply(new THREE.Quaternion().setFromAxisAngle(
+                new THREE.Vector3(0, 0, 1),
+                nod
+            ));
+        }
+        const jawPulse = reducedMotion ? 0 : Math.sin(time * 1.5) * 0.018;
+        const jawLeftHinge = new THREE.Vector3(0.02, -0.11, -0.18);
+        const jawRightHinge = new THREE.Vector3(0.02, -0.11, 0.18);
+        const jawLeftFront = new THREE.Vector3(0.57, -0.12 - jawPulse, -0.12);
+        const jawRightFront = new THREE.Vector3(0.57, -0.12 - jawPulse, 0.12);
+        const jawLeftBack = new THREE.Vector3(0.08, -0.24 - jawPulse, -0.18);
+        const jawRightBack = new THREE.Vector3(0.08, -0.24 - jawPulse, 0.18);
+        const headPairs = [
+            [jawLeftHinge, jawLeftFront], [jawRightHinge, jawRightFront],
+            [jawLeftFront, jawLeftBack], [jawRightFront, jawRightBack],
+            [jawLeftBack, jawLeftHinge], [jawRightBack, jawRightHinge]
+        ];
+        headPairs.forEach(([start, end], index) => placeBone(headBones[index], start, end));
+
+        for (let tooth = 0; tooth < 2; tooth++) {
+            const x = 0.25 + tooth * 0.11;
+            placeBone(
+                headBones[6 + tooth],
+                new THREE.Vector3(x, -0.015, tooth === 0 ? -0.12 : 0.12),
+                new THREE.Vector3(x + 0.015, -0.105 - jawPulse, tooth === 0 ? -0.11 : 0.11)
+            );
+        }
+        const joints = [jawLeftHinge, jawRightHinge, jawLeftFront, jawRightFront, jawLeftBack, jawRightBack];
+        joints.forEach((point, index) => {
+            headJoints[index].position.copy(point);
+            headJoints[index].scale.setScalar(index < 2 ? 1 : 0.78);
+        });
+        eyes.forEach(eye => eye.scale.y = 1 - blink * 0.82);
+        pupils.forEach(pupil => pupil.scale.y = 1 - blink * 0.82);
+        fangs.forEach(fang => {
+            fang.position.y = -0.16 - jawPulse;
+        });
+
+        const wave = reducedMotion ? 0 : Math.sin(time * 0.8) * 0.035;
+        const antennaRoots = [
+            new THREE.Vector3(0.24, 0.22, -0.16),
+            new THREE.Vector3(0.24, 0.22, 0.16)
+        ];
+        antennaRoots.forEach((root, sideIndex) => {
+            const side = sideIndex === 0 ? -1 : 1;
+            const bend = new THREE.Vector3(0.4, 0.4 + wave, side * 0.25);
+            const outer = new THREE.Vector3(0.78, 0.56 + wave * 1.4, side * 0.46);
+            const tip = new THREE.Vector3(1.32, 0.62 + wave * 1.8, side * 0.63);
+            const offset = sideIndex * 3;
+            const points = [root, bend, outer, tip];
+            for (let segment = 0; segment < 3; segment++) {
+                placeBone(antennaBones[offset + segment], points[segment], points[segment + 1]);
+                antennaJoints[offset + segment].position.copy(points[segment]);
+            }
+            antennaTips[sideIndex].mesh.position.copy(tip);
+        });
+        antennaLight.position.set(0.92, 0.56 + wave, 0);
+        antennaGlowMaterial.emissiveIntensity = 0.46
+            + (reducedMotion ? 0 : Math.sin(time * 1.3) * 0.05);
+    }
+
+    function worldPointer(event) {
+        const bounds = canvas.getBoundingClientRect();
+        cursor.set(
+            ((event.clientX - bounds.left) / bounds.width) * 2 - 1,
+            -((event.clientY - bounds.top) / bounds.height) * 2 + 1
+        );
+        raycaster.setFromCamera(cursor, camera);
+        if (raycaster.ray.intersectPlane(cursorPlane, hitPoint)) {
+            const delta = hitPoint.clone().sub(lastPointerWorld);
+            delta.y = 0;
+            if (delta.lengthSq() > 0.0025) targetPointerDirection.copy(delta.normalize());
+            cursorWorld.copy(hitPoint);
+            lastPointerWorld.copy(hitPoint);
+            pointerSeen = true;
+            lastPointerMove = performance.now();
+        }
+    }
+
+    canvas.addEventListener("pointermove", worldPointer);
+
+    function resize() {
+        const width = window.innerWidth;
+        const height = window.innerHeight;
+        renderer.setSize(width, height);
+        camera.aspect = width / height;
+        camera.updateProjectionMatrix();
+    }
+    window.addEventListener("resize", resize);
+
+    function updateSpine(deltaSeconds) {
+        pointerDirection.lerp(
+            targetPointerDirection,
+            1 - Math.exp(-1.8 * deltaSeconds)
+        ).normalize();
+        const target = cursorWorld.clone().addScaledVector(pointerDirection, -0.72);
+        target.y = 0.22;
+        const previousHead = spine[0].clone();
+        const ease = 1 - Math.exp(-2.1 * deltaSeconds);
+        spine[0].lerp(target, ease);
+        const movement = spine[0].clone().sub(previousHead);
+        if (movement.lengthSq() > 0.00001) {
+            const desiredHeading = movement.normalize();
+            desiredHeading.y = 0;
+            heading.lerp(desiredHeading.normalize(), 1 - Math.exp(-1.7 * deltaSeconds)).normalize();
+        }
+        const speed = previousHead.distanceTo(spine[0]) / Math.max(deltaSeconds, 0.001);
+        const targetEnergy = Math.min(0.82, speed / 2.8);
+        const energyRate = targetEnergy > movementEnergy ? 2.2 : 1.05;
+        movementEnergy += (targetEnergy - movementEnergy) * (1 - Math.exp(-energyRate * deltaSeconds));
+        gaitDistance += previousHead.distanceTo(spine[0]);
+
+        for (let index = 1; index < spine.length; index++) {
+            const previous = spine[index - 1];
+            const direction = index === 1
+                ? heading
+                : spine[index - 2].clone().sub(previous).normalize();
+            const backward = direction.clone().negate();
+            const desired = previous.clone().addScaledVector(backward, segmentSpacing);
+            spine[index].lerp(desired, 1 - Math.exp(-5.2 * deltaSeconds));
+            const offset = spine[index].clone().sub(previous);
+            if (offset.lengthSq() < 0.000001) offset.copy(backward);
+            const referenceAngle = Math.atan2(backward.z, backward.x);
+            const candidateAngle = Math.atan2(offset.z, offset.x);
+            const difference = Math.atan2(
+                Math.sin(candidateAngle - referenceAngle),
+                Math.cos(candidateAngle - referenceAngle)
+            );
+            const bendLimit = 0.11 + movementEnergy * 0.07;
+            const bend = Math.max(-bendLimit, Math.min(bendLimit, difference));
+            const candidateAngles = [referenceAngle + bend];
+            const collisionStart = Math.max(0, index - 7);
+            const proposedPoint = new THREE.Vector3(
+                previous.x + Math.cos(referenceAngle + bend) * segmentSpacing,
+                0,
+                previous.z + Math.sin(referenceAngle + bend) * segmentSpacing
+            );
+            let hasCollision = false;
+            for (let segment = 0; segment < collisionStart; segment++) {
+                if (
+                    pointSegmentDistanceSquaredXZ(
+                        proposedPoint,
+                        spine[segment],
+                        spine[segment + 1]
+                    ) < spineClearance * spineClearance
+                ) {
+                    hasCollision = true;
+                    break;
                 }
             }
-            bestAngle = hasSafeAngle ? safeAngle : safestAngle;
-        }
 
-        point.x = previous.x + Math.cos(bestAngle) * segmentSpacing;
-        point.y = previous.y + Math.sin(bestAngle) * segmentSpacing;
-    }
-}
+            if (hasCollision) {
+                candidateAngles.length = 0;
+                for (let sample = 0; sample <= 16; sample++) {
+                    candidateAngles.push(referenceAngle - bendLimit + 2 * bendLimit * sample / 16);
+                }
+            }
 
-function localFrame(index) {
-    const before = spine[Math.max(0, index - 1)];
-    const after = spine[Math.min(spine.length - 1, index + 1)];
-    let dx = before.x - after.x;
-    let dy = before.y - after.y;
-    const length = Math.hypot(dx, dy) || 1;
-    dx /= length;
-    dy /= length;
-    return {
-        tangent: { x: dx, y: dy },
-        normal: { x: -dy, y: dx }
-    };
-}
+            let bestAngle = candidateAngles[0];
+            let bestClearance = -Infinity;
+            for (const angle of candidateAngles) {
+                const candidate = new THREE.Vector3(
+                    previous.x + Math.cos(angle) * segmentSpacing,
+                    0,
+                    previous.z + Math.sin(angle) * segmentSpacing
+                );
+                let clearance = Infinity;
+                for (let segment = 0; segment < collisionStart; segment++) {
+                    clearance = Math.min(
+                        clearance,
+                        pointSegmentDistanceSquaredXZ(candidate, spine[segment], spine[segment + 1])
+                    );
+                }
+                if (clearance > bestClearance) {
+                    bestAngle = angle;
+                    bestClearance = clearance;
+                }
+                if (!hasCollision || clearance >= spineClearance * spineClearance) {
+                    bestAngle = angle;
+                    break;
+                }
+            }
 
-function drawRib(index) {
-    const point = spine[index];
-    const { tangent, normal } = localFrame(index);
-    const bodyPosition = index / (ribCount - 1);
-    const taper = bodyPosition < 0.78
-        ? 1 - Math.max(0, bodyPosition - 0.52) * 1.05
-        : 0.51 - (bodyPosition - 0.78) * 1.5;
-    const breath = 1 + Math.sin(animationTime * 1.25 + Math.sin(animationTime * 0.31) * 0.3) * 0.012;
-    const gaitFlex = 1 + Math.sin(gaitDistance / 48 * Math.PI * 2 - index * 0.2)
-        * movementEnergy * 0.018;
-    const halfWidth = Math.max(2.2, 20.5 * taper * breath * gaitFlex);
-    const ribDepth = segmentSpacing * 0.54;
-    const rear = {
-        x: point.x - tangent.x * ribDepth,
-        y: point.y - tangent.y * ribDepth
-    };
-    const left = {
-        x: point.x + normal.x * halfWidth,
-        y: point.y + normal.y * halfWidth
-    };
-    const right = {
-        x: point.x - normal.x * halfWidth,
-        y: point.y - normal.y * halfWidth
-    };
-    const shade = index % 4 === 0 ? 0.84 : 0.66;
-    const color = `rgba(224, 222, 211, ${shade})`;
-    strokeLine(left, rear, color, 1.05, 1.7);
-    strokeLine(rear, right, color, 1.05, 1.7);
-    strokeLine(
-        { x: point.x - tangent.x * 2.2, y: point.y - tangent.y * 2.2 },
-        { x: point.x + tangent.x * 2.1, y: point.y + tangent.y * 2.1 },
-        "rgba(151, 186, 204, 0.56)",
-        0.72,
-        0.7
-    );
-    if (index % 2 === 0) drawJoint(point, 0.82);
-}
-
-function drawStarTip(point, tangent, normal) {
-    const size = 3.3;
-    const tip = { x: point.x + tangent.x * size, y: point.y + tangent.y * size };
-    const forkLeft = {
-        x: point.x - tangent.x * 1.1 + normal.x * 2.3,
-        y: point.y - tangent.y * 1.1 + normal.y * 2.3
-    };
-    const forkRight = {
-        x: point.x - tangent.x * 1.1 - normal.x * 2.3,
-        y: point.y - tangent.y * 1.1 - normal.y * 2.3
-    };
-    strokeLine(point, tip, "rgba(225, 228, 232, 0.8)", 0.75, 1.5);
-    strokeLine(tip, forkLeft, "rgba(225, 228, 232, 0.75)", 0.65, 1.2);
-    strokeLine(tip, forkRight, "rgba(225, 228, 232, 0.75)", 0.65, 1.2);
-}
-
-function drawLeg(index, side, pair) {
-    const base = spine[index];
-    const { tangent, normal } = localFrame(index);
-    const strideLength = 48;
-    const cycle = ((gaitDistance / strideLength + pair * 0.5 + (side < 0 ? 0 : 0.5)) % 1 + 1) % 1;
-    const stanceRatio = 0.64;
-    let step;
-    let lift = 0;
-    if (cycle < stanceRatio) {
-        const stanceProgress = cycle / stanceRatio;
-        step = (0.5 - stanceProgress) * strideLength * 0.52;
-    } else {
-        const swingProgress = (cycle - stanceRatio) / (1 - stanceRatio);
-        const easedSwing = swingProgress * swingProgress * (3 - 2 * swingProgress);
-        step = (-0.5 + easedSwing) * strideLength * 0.52;
-        lift = Math.sin(swingProgress * Math.PI) * 5.5;
-    }
-    const strideScale = 1 - turnAmount * 0.18;
-    step *= movementEnergy * strideScale;
-    lift *= movementEnergy * (1 - turnAmount * 0.12);
-    const bodyPosition = index / (ribCount - 1);
-    const rootWidth = 10.5 * (1 - bodyPosition * 0.52);
-    const hip = {
-        x: base.x + normal.x * side * rootWidth,
-        y: base.y + normal.y * side * rootWidth
-    };
-    const knee = {
-        x: base.x + normal.x * side * 26 + tangent.x * (step - 3),
-        y: base.y + normal.y * side * 26 + tangent.y * (step - 3) - lift
-    };
-    const foot = {
-        x: base.x + normal.x * side * 46 + tangent.x * (step + 5),
-        y: base.y + normal.y * side * 46 + tangent.y * (step + 5) - lift
-    };
-    const color = "rgba(225, 222, 211, 0.84)";
-    strokeLine(hip, knee, color, 1.05, 1.4);
-    strokeLine(knee, foot, color, 0.95, 1.4);
-    drawJoint(hip, 0.95);
-    drawJoint(knee, 1.1);
-    drawStarTip(foot, tangent, normal);
-}
-
-function buildTail() {
-    const tail = [spine[spine.length - 1]];
-    const frameAtRear = localFrame(spine.length - 1);
-    let angle = Math.atan2(-frameAtRear.tangent.y, -frameAtRear.tangent.x);
-    for (let i = 1; i <= tailCount; i++) {
-        const idleSway = reducedMotion
-            ? 0
-            : Math.sin(animationTime * 0.48 - i * 0.22) * 0.006 * (1 - movementEnergy);
-        const tailWave = reducedMotion ? 0 : Math.sin(animationTime * 1.1 - i * 0.18) * 0.018 * movementEnergy;
-        angle += 0.025 + idleSway + tailWave
-            + Math.sin(animationTime * 0.6 + i * 0.23) * 0.009 * movementEnergy;
-        const previous = tail[i - 1];
-        const length = segmentSpacing * (i < 10 ? 0.9 : 0.78);
-        tail.push({
-            x: previous.x + Math.cos(angle) * length,
-            y: previous.y + Math.sin(angle) * length
-        });
-    }
-    return tail;
-}
-
-function drawTail(tail) {
-    for (let i = 0; i < tail.length - 1; i++) {
-        const point = tail[i];
-        const next = tail[i + 1];
-        const previous = tail[Math.max(0, i - 1)];
-        let dx = next.x - previous.x;
-        let dy = next.y - previous.y;
-        const length = Math.hypot(dx, dy) || 1;
-        dx /= length;
-        dy /= length;
-        const normal = { x: -dy, y: dx };
-        const taper = Math.max(0.8, 3.5 * (1 - i / (tail.length + 1)));
-        const left = { x: point.x + normal.x * taper, y: point.y + normal.y * taper };
-        const right = { x: point.x - normal.x * taper, y: point.y - normal.y * taper };
-        strokeLine(left, right, "rgba(218, 222, 226, 0.65)", 0.72, 1.4);
-        strokeLine(point, next, "rgba(198, 204, 210, 0.42)", 0.65, 0.8);
-        if (i % 3 === 0) drawJoint(point, Math.max(0.65, 0.95 - i * 0.02));
-    }
-
-    const tip = tail[tail.length - 1];
-    const previous = tail[tail.length - 2];
-    let angle = Math.atan2(tip.y - previous.y, tip.x - previous.x);
-    const loop = {
-        x: tip.x + Math.cos(angle + 1.2) * 3.2,
-        y: tip.y + Math.sin(angle + 1.2) * 3.2
-    };
-    strokeLine(tip, loop, "rgba(220, 224, 228, 0.72)", 0.7, 1.2);
-    ctx.beginPath();
-    ctx.arc(loop.x, loop.y, 1.5, 0, Math.PI * 2);
-    ctx.strokeStyle = "rgba(220, 224, 228, 0.72)";
-    ctx.lineWidth = 0.65;
-    ctx.shadowColor = "rgba(225, 230, 235, 0.45)";
-    ctx.shadowBlur = 1.5;
-    ctx.stroke();
-    ctx.shadowBlur = 0;
-}
-
-function drawHead() {
-    const head = spine[0];
-    const { tangent } = localFrame(0);
-    const direction = Math.atan2(tangent.y, tangent.x) + headLookAngle;
-    const jawMotion = reducedMotion ? 0 : Math.sin(animationTime * 1.5) * 0.38;
-    const pale = "rgba(239, 232, 213, 0.96)";
-    const fine = "rgba(174, 194, 201, 0.82)";
-
-    ctx.save();
-    ctx.translate(head.x, head.y);
-    ctx.rotate(direction);
-
-    const neckDeltaX = spine[1].x - head.x;
-    const neckDeltaY = spine[1].y - head.y;
-    const neck = {
-        x: neckDeltaX * Math.cos(direction) + neckDeltaY * Math.sin(direction),
-        y: -neckDeltaX * Math.sin(direction) + neckDeltaY * Math.cos(direction)
-    };
-    strokeLine({ x: -2.5, y: 0 }, neck, fine, 0.78, 0.8);
-    drawJoint(neck, 0.8);
-
-    ctx.beginPath();
-    ctx.moveTo(-3, 0);
-    ctx.lineTo(1, -5.2);
-    ctx.lineTo(9, -7);
-    ctx.lineTo(16, -5);
-    ctx.lineTo(23, -1.8);
-    ctx.lineTo(25, 0);
-    ctx.lineTo(23, 1.8);
-    ctx.lineTo(16, 5);
-    ctx.lineTo(9, 7);
-    ctx.lineTo(1, 5.2);
-    ctx.closePath();
-    ctx.lineWidth = 0.85;
-    ctx.strokeStyle = pale;
-    ctx.shadowColor = "rgba(157, 220, 255, 0.46)";
-    ctx.shadowBlur = 3.2;
-    ctx.stroke();
-    ctx.shadowBlur = 0;
-
-    for (const side of [-1, 1]) {
-        const socketX = 13.5;
-        const socketY = side * 3.15;
-        const socketHeight = 2.25 * (1 - blinkAmount * 0.84);
-        ctx.beginPath();
-        ctx.ellipse(socketX, socketY, 3.15, socketHeight, side * 0.16, 0, Math.PI * 2);
-        ctx.fillStyle = "rgba(4, 9, 14, 0.96)";
-        ctx.fill();
-        ctx.lineWidth = 0.55;
-        ctx.strokeStyle = "rgba(179, 209, 217, 0.74)";
-        ctx.stroke();
-        ctx.beginPath();
-        ctx.arc(socketX + 0.65, socketY - side * 0.15, 0.72 * (1 - blinkAmount), 0, Math.PI * 2);
-        ctx.fillStyle = "rgba(157, 220, 255, 0.94)";
-        ctx.shadowColor = "rgba(87, 190, 255, 0.85)";
-        ctx.shadowBlur = 5;
-        ctx.fill();
-        ctx.shadowBlur = 0;
-        if (blinkAmount > 0.05) {
-            ctx.beginPath();
-            ctx.moveTo(socketX - 2.8, socketY);
-            ctx.lineTo(socketX + 2.8, socketY);
-            ctx.lineWidth = 0.9;
-            ctx.strokeStyle = `rgba(239, 232, 213, ${blinkAmount * 0.9})`;
-            ctx.stroke();
+            const bodyWave = reducedMotion ? 0 : Math.sin(gaitDistance * 5.2 - index * 0.32);
+            const idleBreath = reducedMotion ? 0 : Math.sin(performance.now() * 0.0015 - index * 0.12);
+            spine[index].set(
+                previous.x + Math.cos(bestAngle) * segmentSpacing,
+                0.22 + bodyWave * movementEnergy * 0.025 + idleBreath * 0.006,
+                previous.z + Math.sin(bestAngle) * segmentSpacing
+            );
         }
     }
 
-    strokeLine({ x: 0, y: 0 }, { x: 9, y: 0 }, fine, 0.7, 0.7);
-    strokeLine({ x: 9, y: 0 }, { x: 17, y: -2.2 }, fine, 0.65, 0.6);
-    strokeLine({ x: 9, y: 0 }, { x: 17, y: 2.2 }, fine, 0.65, 0.6);
-    drawJoint({ x: 0, y: 0 }, 0.95);
+    function updateCreature(time, deltaSeconds) {
+        updateSpine(deltaSeconds);
+        if (!reducedMotion) {
+            spineLightProgress = (spineLightProgress + deltaSeconds / 7.5) % 1;
+        }
+        const lightPosition = spineLightProgress * (ribCount - 1);
+        const lightIndex = Math.floor(lightPosition);
+        const lightFraction = lightPosition - lightIndex;
+        const lightNextIndex = Math.min(ribCount - 1, lightIndex + 1);
+        travelingSpineLight.position.lerpVectors(spine[lightIndex], spine[lightNextIndex], lightFraction);
+        travelingSpineLight.position.y += 0.2;
+        for (let index = 0; index < spineBones.length; index++) {
+            placeBone(spineBones[index], spine[index], spine[index + 1]);
+            spineJoints[index].position.copy(spine[index]);
+        }
+        spineJoints[spineJoints.length - 1].position.copy(spine[spine.length - 1]);
 
-    for (const side of [-1, 1]) {
-        const hinge = { x: 3, y: side * 5 };
-        const jawFront = { x: 36, y: side * (7 + jawMotion) };
-        const jawRear = { x: 7, y: side * (11 + jawMotion) };
-        strokeLine(hinge, jawFront, pale, 1, 1.1);
-        strokeLine(jawFront, jawRear, pale, 0.9, 1);
-        strokeLine(jawRear, hinge, fine, 0.72, 0.7);
-        drawJoint(hinge, 1.15);
-        drawJoint(jawFront, 0.8);
+        for (const section of bodySections) {
+            const base = spine[section.index];
+            const before = spine[Math.max(0, section.index - 1)];
+            const after = spine[Math.min(spine.length - 1, section.index + 1)];
+            const tangent = before.clone().sub(after).setY(0).normalize();
+            const yaw = Math.atan2(-tangent.z, tangent.x);
+            const sideAxis = new THREE.Vector3(-tangent.z, 0, tangent.x);
+            const position = section.index / (ribCount - 1);
+            const taper = 1 - Math.max(0, position - 0.58) * 1.35;
+            const breath = 1 + Math.sin(time * 0.0015 - section.index * 0.13) * 0.018;
+            section.flesh.position.set(base.x, base.y - 0.09, base.z);
+            section.flesh.rotation.y = yaw;
+            section.flesh.scale.y = 0.18 * taper * breath;
+            const lightDistance = section.index - lightPosition;
+            section.dorsal.material.emissive.setHex(0xb9662d);
+            section.dorsal.material.emissiveIntensity = 0.015
+                + 0.82 * Math.exp(-(lightDistance * lightDistance) / 12);
+            section.dorsal.position.set(base.x - tangent.x * 0.015, base.y + 0.075, base.z - tangent.z * 0.015);
+            section.dorsal.rotation.set(0, yaw, -0.16);
+            section.sidePlates.forEach((plate, sideIndex) => {
+                const side = sideIndex === 0 ? -1 : 1;
+                plate.position.copy(base)
+                    .add(new THREE.Vector3(0, -0.055, 0))
+                    .addScaledVector(sideAxis, side * 0.405 * taper);
+                plate.rotation.set(0, yaw + (side < 0 ? Math.PI : 0), side * 0.1);
+                plate.scale.set(0.66 * taper, 1.2 * taper, 1);
+                const scale = section.sideScales[sideIndex];
+                scale.position.copy(base)
+                    .add(new THREE.Vector3(0, -0.22 * taper, 0))
+                    .addScaledVector(sideAxis, side * 0.365 * taper);
+                scale.rotation.set(0, yaw + (side < 0 ? Math.PI : 0), side * 0.24);
+                scale.scale.set(0.58 * taper, 0.9 * taper, 0.8);
+            });
+            const spikeBase = base.clone().add(new THREE.Vector3(0, 0.105, 0));
+            const spikeLength = 0.5 * (1 - position * 0.55);
+            const spikeTip = spikeBase.clone()
+                .addScaledVector(tangent, -spikeLength * 0.72)
+                .add(new THREE.Vector3(0, spikeLength, 0));
+            placeBone(section.spine, spikeBase, spikeTip);
+        }
+
+        for (const rib of ribs) {
+            const base = spine[rib.index];
+            const before = spine[Math.max(0, rib.index - 1)];
+            const after = spine[Math.min(spine.length - 1, rib.index + 1)];
+            const tangent = before.clone().sub(after).setY(0).normalize();
+            const sideAxis = new THREE.Vector3(-tangent.z, 0, tangent.x);
+            const position = rib.index / (ribCount - 1);
+            const taper = position < 0.78
+                ? 1 - Math.max(0, position - 0.52) * 1.05
+                : 0.51 - (position - 0.78) * 1.5;
+            const breath = 1 + Math.sin(time * 1.25) * 0.018;
+            const width = Math.max(0.09, 0.37 * taper * breath);
+            const top = base.clone().add(new THREE.Vector3(0, 0.01, 0));
+            const tips = [];
+            rib.sides.forEach((bones, sideIndex) => {
+                const side = sideIndex === 0 ? -1 : 1;
+                const shoulder = top.clone()
+                    .addScaledVector(tangent, -0.045)
+                    .add(new THREE.Vector3(0, -0.08, 0))
+                    .addScaledVector(sideAxis, side * width * 0.7);
+                const tip = top.clone()
+                    .addScaledVector(tangent, -0.13)
+                    .add(new THREE.Vector3(0, -0.43 * taper, 0))
+                    .addScaledVector(sideAxis, side * width * 1.3);
+                placeBone(bones.upper, top, shoulder);
+                placeBone(bones.lower, shoulder, tip);
+                bones.joint.position.copy(shoulder);
+                tips.push(tip);
+            });
+            if (rib.crossbar) placeBone(rib.crossbar, tips[0], tips[1]);
+        }
+
+        for (const leg of legs) {
+            const base = spine[leg.index];
+            const before = spine[Math.max(0, leg.index - 1)];
+            const after = spine[Math.min(spine.length - 1, leg.index + 1)];
+            const tangent = before.clone().sub(after).setY(0).normalize();
+            const sideAxis = new THREE.Vector3(-tangent.z, 0, tangent.x);
+            const strideLength = 0.78;
+            const cycle = ((gaitDistance / strideLength + leg.pair * 0.18 + (leg.side < 0 ? 0 : 0.5)) % 1 + 1) % 1;
+            const stanceRatio = 0.62;
+            let step;
+            let lift = 0;
+            if (cycle < stanceRatio) {
+                const stanceProgress = cycle / stanceRatio;
+                step = (0.5 - stanceProgress) * strideLength * 0.78;
+            } else {
+                const progress = (cycle - stanceRatio) / (1 - stanceRatio);
+                const eased = progress * progress * (3 - 2 * progress);
+                step = (-0.5 + eased) * strideLength * 0.78;
+                lift = Math.sin(progress * Math.PI) * 0.18;
+            }
+            step *= movementEnergy;
+            lift *= movementEnergy;
+            const hip = base.clone().add(new THREE.Vector3(0, 0.04, 0))
+                .addScaledVector(sideAxis, leg.side * 0.12);
+            const coxaEnd = base.clone()
+                .addScaledVector(tangent, step * 0.18)
+                .add(new THREE.Vector3(0, -0.07, 0))
+                .addScaledVector(sideAxis, leg.side * 0.27);
+            const knee = base.clone()
+                .addScaledVector(tangent, step * 0.55 - 0.06)
+                .add(new THREE.Vector3(0, -0.29 - lift * 0.4, 0))
+                .addScaledVector(sideAxis, leg.side * 0.43);
+            const foot = base.clone()
+                .addScaledVector(tangent, step + 0.06)
+                .add(new THREE.Vector3(0, -0.88 - lift, 0))
+                .addScaledVector(sideAxis, leg.side * 0.58);
+            placeBone(leg.coxa, hip, coxaEnd);
+            placeBone(leg.upper, coxaEnd, knee);
+            placeBone(leg.lower, knee, foot);
+            leg.hip.position.copy(hip);
+            leg.knee.position.copy(knee);
+            leg.foot.position.copy(foot);
+            const toeOffsets = [-1, 0, 1];
+            toeOffsets.forEach((offset, index) => {
+                const toeTip = foot.clone()
+                    .addScaledVector(tangent, 0.2)
+                    .addScaledVector(sideAxis, leg.side * 0.09 + offset * 0.065)
+                    .add(new THREE.Vector3(0, -0.075, 0));
+                placeBone(leg.toes[index], foot, toeTip);
+            });
+        }
+
+        const tailDirection = spine[spine.length - 1].clone()
+            .sub(spine[spine.length - 2]).normalize();
+        const sideAxis = new THREE.Vector3(-tailDirection.z, 0, tailDirection.x);
+        tailPoints[0].copy(spine[spine.length - 1]);
+        for (let index = 1; index < tailPoints.length; index++) {
+            const wave = reducedMotion
+                ? 0
+                : Math.sin(gaitDistance * 3.2 - index * 0.38) * 0.11 * movementEnergy
+                    + Math.sin(time * 0.001 - index * 0.24) * 0.025;
+            const direction = tailDirection.clone().addScaledVector(sideAxis, wave).normalize();
+            tailPoints[index].copy(tailPoints[index - 1]).addScaledVector(direction, index < 10 ? 0.105 : 0.09);
+            placeBone(tailBones[index - 1], tailPoints[index - 1], tailPoints[index]);
+            if (tailJoints[index - 1]) tailJoints[index - 1].position.copy(tailPoints[index - 1]);
+        }
+        for (const lantern of tailLanterns) {
+            lantern.mesh.position.copy(tailPoints[lantern.index]);
+            lantern.mesh.position.y += 0.035 * (1 - lantern.index / (tailCount + 1));
+        }
+        tailLight.position.copy(tailPoints[tailCount]);
+        tailLight.position.y += 0.06;
+        tailGlowMaterial.emissiveIntensity = 0.52
+            + (reducedMotion ? 0 : Math.sin(time * 0.002) * 0.08);
+        for (const section of tailSections) {
+            const base = tailPoints[section.index];
+            const tangent = tailPoints[section.index - 1].clone().sub(tailPoints[section.index + 1]).normalize();
+            const taper = 1 - section.index / (tailCount + 1);
+            const yaw = Math.atan2(-tangent.z, tangent.x);
+            section.flesh.position.copy(base);
+            section.flesh.rotation.y = yaw;
+            section.plate.position.copy(base).add(new THREE.Vector3(0, 0.035 * taper, 0));
+            section.plate.rotation.y = yaw;
+            const spikeBase = base.clone().add(new THREE.Vector3(0, 0.055 * taper, 0));
+            const spikeTip = spikeBase.clone()
+                .addScaledVector(tangent, -0.09 * taper)
+                .add(new THREE.Vector3(0, 0.21 * taper, 0));
+            placeBone(section.spine, spikeBase, spikeTip);
+        }
+
+        const blinkDuration = 170;
+        const blink = Math.max(0, 1 - Math.abs(time - blinkStartedAt) / blinkDuration);
+        if (time >= nextBlinkAt) {
+            blinkStartedAt = time;
+            nextBlinkAt = time + 2600 + Math.random() * 3300;
+        }
+        setHeadPose(time / 1000, blink);
+        const idleFor = performance.now() - lastPointerMove;
+        stateLabel.textContent = !pointerSeen
+            ? "Waiting for you"
+            : idleFor > 500 ? "Watching quietly" : movementEnergy > 0.2 ? "Scurrying along" : "Following you";
     }
 
-    for (let i = 0; i < 5; i++) {
-        const x = 11 + i * 4;
-        const baseY = 5.5 + (x - 11) * 0.045;
-        const toothTipY = 9.1 + jawMotion;
-        const halfTooth = 1.15;
-        ctx.beginPath();
-        ctx.moveTo(x - halfTooth, baseY);
-        ctx.lineTo(x, toothTipY);
-        ctx.lineTo(x + halfTooth, baseY + 0.1);
-        ctx.strokeStyle = fine;
-        ctx.lineWidth = 0.62;
-        ctx.lineCap = "round";
-        ctx.lineJoin = "round";
-        ctx.shadowColor = "rgba(230, 235, 240, 0.5)";
-        ctx.shadowBlur = 0.9;
-        ctx.stroke();
-        ctx.shadowBlur = 0;
+    function animate(timestamp) {
+        const deltaSeconds = previousTime
+            ? Math.min((timestamp - previousTime) / 1000, 0.05)
+            : 1 / 60;
+        previousTime = timestamp;
+        updateCreature(timestamp, deltaSeconds);
+        cameraFocus.copy(spine[0]).add(spine[spine.length - 1]).multiplyScalar(0.5);
+        cameraFocus.y = 0;
+        cameraPosition.copy(cameraFocus).add(cameraOffset);
+        camera.position.lerp(cameraPosition, 1 - Math.exp(-1.1 * deltaSeconds));
+        camera.lookAt(cameraFocus);
+        renderer.render(scene, camera);
+        requestAnimationFrame(animate);
     }
 
-    const feelerWave = reducedMotion ? 0 : Math.sin(animationTime * 0.8) * 0.45;
-    for (const side of [-1, 1]) {
-        const root = { x: 16, y: side * 4.2 };
-        const joint = { x: 25, y: side * (7.5 + feelerWave) };
-        const tip = { x: 43, y: side * (7 + feelerWave * 1.3) };
-        ctx.beginPath();
-        ctx.moveTo(root.x, root.y);
-        ctx.quadraticCurveTo(
-            joint.x - 3,
-            joint.y,
-            joint.x,
-            joint.y
-        );
-        ctx.quadraticCurveTo(joint.x + 8, tip.y + side * 1.5, tip.x, tip.y);
-        ctx.lineWidth = 0.72;
-        ctx.strokeStyle = pale;
-        ctx.lineCap = "round";
-        ctx.lineJoin = "round";
-        ctx.shadowColor = "rgba(225, 232, 240, 0.55)";
-        ctx.shadowBlur = 1.6;
-        ctx.stroke();
-        ctx.shadowBlur = 0;
-        drawJoint(root, 0.9);
-        drawJoint(joint, 0.82);
-        drawJoint(tip, 0.72);
-    }
-    ctx.restore();
-}
-
-function drawCreature() {
-    updateSpine(frameDelta);
-    const head = spine[0];
-    const aura = ctx.createRadialGradient(
-        width * 0.5 + head.x * scale,
-        height * 0.5 + head.y * scale,
-        1,
-        width * 0.5 + head.x * scale,
-        height * 0.5 + head.y * scale,
-        52 * scale
-    );
-    aura.addColorStop(0, "rgba(60, 148, 195, 0.09)");
-    aura.addColorStop(1, "rgba(60, 148, 195, 0)");
-    ctx.fillStyle = aura;
-    ctx.fillRect(0, 0, width, height);
-    ctx.save();
-    ctx.translate(width * 0.5, height * 0.5);
-    ctx.scale(scale, scale);
-    for (let i = 1; i < ribCount; i++) drawRib(i);
-    for (let pair = 0; pair < legsAt.length; pair++) {
-        drawLeg(legsAt[pair], -1, pair);
-        drawLeg(legsAt[pair], 1, pair);
-    }
-    drawTail(buildTail());
-    drawHead();
-    ctx.restore();
-}
-
-let frameDelta = 1 / 60;
-
-function updateIdleBehavior(timestamp, deltaSeconds) {
-    const canLookAround = movementState === "idle" && movementEnergy < 0.04;
-    if (canLookAround && timestamp >= nextLookAt) {
-        targetHeadLookAngle = randomBetween(-0.19, 0.19);
-        lookUntil = timestamp + randomBetween(650, 1500);
-        nextLookAt = lookUntil + randomBetween(2600, 5600);
-    }
-    if (!canLookAround || timestamp >= lookUntil) targetHeadLookAngle = 0;
-    headLookAngle += (targetHeadLookAngle - headLookAngle) * (1 - Math.exp(-3.4 * deltaSeconds));
-
-    if (timestamp >= nextBlinkAt) {
-        blinkStartedAt = timestamp;
-        nextBlinkAt = timestamp + randomBetween(2600, 5900);
-    }
-    const blinkProgress = (timestamp - blinkStartedAt) / 170;
-    blinkAmount = blinkProgress >= 0 && blinkProgress <= 1
-        ? Math.sin(blinkProgress * Math.PI)
-        : 0;
-}
-
-function animate(timestamp) {
-    const deltaSeconds = previousFrameTime
-        ? Math.min((timestamp - previousFrameTime) / 1000, 0.05)
-        : 1 / 60;
-    previousFrameTime = timestamp;
-    frameDelta = deltaSeconds;
-    if (!reducedMotion) animationTime += deltaSeconds;
-    updateIdleBehavior(timestamp, deltaSeconds);
-    ctx.clearRect(0, 0, width, height);
-    drawCreature();
+    nextBlinkAt = performance.now() + 2200;
     requestAnimationFrame(animate);
+} catch (error) {
+    console.error("Unable to initialize the 3D creature.", error);
+    showError("The 3D scene could not start. Check your connection and make sure WebGL is enabled, then reload the page.");
 }
-
-initialize();
-animate();
 </script>
 </body>
 </html>
