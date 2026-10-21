@@ -270,9 +270,15 @@ try {
     grid.material.transparent = true;
     grid.material.opacity = 0.2;
     scene.add(grid);
+    const creatureRoot = new THREE.Group();
+    scene.add(creatureRoot);
 
     const up = new THREE.Vector3(0, 1, 0);
     const forwardAxis = new THREE.Vector3(1, 0, 0);
+    const yawAxis = new THREE.Vector3(0, 1, 0);
+    const pitchAxis = new THREE.Vector3(0, 0, 1);
+    const rollAxis = new THREE.Vector3(1, 0, 0);
+    const headRotation = new THREE.Quaternion();
     const worldUp = new THREE.Vector3(0, 1, 0);
     const raycaster = new THREE.Raycaster();
     const cursorPlane = new THREE.Plane(worldUp, 0);
@@ -282,15 +288,33 @@ try {
     const heading = new THREE.Vector3(1, 0, 0);
     const pointerDirection = new THREE.Vector3(1, 0, 0);
     const targetPointerDirection = new THREE.Vector3(1, 0, 0);
+    const movementVelocity = new THREE.Vector3();
+    const emergenceStartedAt = performance.now();
     let lastPointerWorld = cursorWorld.clone();
     let pointerSeen = false;
     let previousTime = 0;
     let gaitDistance = 0;
+    const strideLength = 0.78;
     let movementEnergy = 0;
-    let spineLightProgress = 0;
+    let nextMuscleAt = performance.now() + 3200;
+    let muscleStartedAt = -10000;
+    let muscleDuration = 1;
+    let muscleCenter = 18;
+    let muscleWidth = 3;
+    let muscleStrength = 0;
+    let muscleRecoil = false;
     let lastPointerMove = 0;
     let nextBlinkAt = 0;
     let blinkStartedAt = -1000;
+    let nextPauseAt = performance.now() + 6500;
+    let pauseUntil = 0;
+    let nextCuriosityAt = 4200;
+    let curiosityStartedAt = -10000;
+    let curiosityDuration = 1;
+    let curiosityTilt = 0;
+    let nextSniffAt = 9000;
+    let sniffStartedAt = -10000;
+    let sniffDuration = 1;
 
     function makeBone(radius = 0.022, material = boneMaterial) {
         const mesh = new THREE.Mesh(
@@ -299,7 +323,7 @@ try {
         );
         mesh.castShadow = true;
         mesh.receiveShadow = true;
-        scene.add(mesh);
+        creatureRoot.add(mesh);
         return mesh;
     }
 
@@ -309,7 +333,7 @@ try {
             jointMaterial
         );
         mesh.castShadow = true;
-        scene.add(mesh);
+        creatureRoot.add(mesh);
         return mesh;
     }
 
@@ -318,7 +342,7 @@ try {
         mesh.scale.set(...scale);
         mesh.castShadow = true;
         mesh.receiveShadow = true;
-        scene.add(mesh);
+        creatureRoot.add(mesh);
         return mesh;
     }
 
@@ -329,7 +353,7 @@ try {
         );
         mesh.castShadow = true;
         mesh.receiveShadow = true;
-        scene.add(mesh);
+        creatureRoot.add(mesh);
         return mesh;
     }
 
@@ -370,6 +394,7 @@ try {
     }
 
     const ribCount = 50;
+    const musclePulses = new Float32Array(ribCount);
     const segmentSpacing = 0.13;
     const spineClearance = 0.78;
     const spine = Array.from({ length: ribCount }, (_, index) =>
@@ -406,14 +431,14 @@ try {
                 const plate = new THREE.Mesh(shieldGeometry, armorHighlightMaterial);
                 plate.castShadow = true;
                 plate.receiveShadow = true;
-                scene.add(plate);
+                creatureRoot.add(plate);
                 return plate;
             }),
             sideScales: [-1, 1].map(() => {
                 const scale = new THREE.Mesh(shieldGeometry, armorMaterial);
                 scale.castShadow = true;
                 scale.receiveShadow = true;
-                scene.add(scale);
+                creatureRoot.add(scale);
                 return scale;
             }),
             spine: makeSpike(0.09 * taper)
@@ -473,16 +498,13 @@ try {
             tailGlowMaterial
         );
         lantern.scale.set(1.25, 0.65, 1);
-        scene.add(lantern);
+        creatureRoot.add(lantern);
         return { index, mesh: lantern };
     });
     const tailLight = new THREE.PointLight(0xc84c20, 1, 3.2, 2);
-    scene.add(tailLight);
-    const travelingSpineLight = new THREE.PointLight(0xc77a45, 1.05, 3.1, 2);
-    scene.add(travelingSpineLight);
-
+    creatureRoot.add(tailLight);
     const head = new THREE.Group();
-    scene.add(head);
+    creatureRoot.add(head);
     head.add(antennaLight);
     const skull = new THREE.Mesh(new THREE.IcosahedronGeometry(0.35, 1), skullMaterial);
     skull.position.set(0.19, 0.08, 0);
@@ -578,20 +600,108 @@ try {
         head.add(tip);
         return { side, mesh: tip };
     });
+    const antennaShock = [-1, 1].map((side, index) => {
+        const arc = new THREE.Line(
+            new THREE.BufferGeometry(),
+            new THREE.LineBasicMaterial({
+                color: 0x7cf5ff,
+                transparent: true,
+                opacity: 0.55,
+                blending: THREE.AdditiveBlending
+            })
+        );
+        arc.frustumCulled = false;
+        head.add(arc);
+        const branch = new THREE.Line(
+            new THREE.BufferGeometry(),
+            new THREE.LineBasicMaterial({
+                color: 0xffd36f,
+                transparent: true,
+                opacity: 0.4,
+                blending: THREE.AdditiveBlending
+            })
+        );
+        branch.frustumCulled = false;
+        head.add(branch);
+        return { side, phase: index * 1.8 + Math.random() * 3.2, arc, branch };
+    });
     head.add(...headBones, ...headJoints, ...antennaBones, ...antennaJoints);
 
-    function setHeadPose(time, blink) {
+    let headLookYaw = 0;
+
+    function updateAntennaShock(time, wave, stiffness) {
+        antennaShock.forEach(({ side, phase, arc, branch }) => {
+            const root = new THREE.Vector3(0.24, 0.22, side * 0.16);
+            const bend = new THREE.Vector3(0.4, 0.4 + wave, side * 0.25);
+            const outer = new THREE.Vector3(0.78, 0.56 + wave * 1.4, side * 0.46);
+            const tip = new THREE.Vector3(1.32, 0.62 + wave * 1.8, side * 0.63);
+            const points = [];
+            const branchPoints = [];
+            const intensity = Math.max(0.12, stiffness * 0.9 + 0.18);
+
+            for (let step = 0; step <= 14; step++) {
+                const t = step / 14;
+                const path = new THREE.Vector3().lerpVectors(root, tip, t);
+                path.x += Math.sin(t * Math.PI * 3 + time * 0.02 + phase) * 0.09 * intensity;
+                path.y += Math.sin(t * 8 + time * 0.016 + phase) * (0.08 + intensity * 0.18);
+                path.z += side * (Math.sin(t * 9 + phase * 1.4) * 0.12 + 0.04 * intensity);
+                points.push(path);
+
+                if (step > 4 && step < 11 && Math.sin((t * 12) + phase + time * 0.01) > 0.7) {
+                    const branchPoint = path.clone();
+                    branchPoint.x += side * 0.18;
+                    branchPoint.y += 0.12;
+                    branchPoint.z += side * 0.24;
+                    branchPoints.push(branchPoint);
+                }
+            }
+
+            arc.geometry.dispose();
+            arc.geometry = new THREE.BufferGeometry().setFromPoints(points);
+            arc.material.opacity = 0.25 + intensity * 0.65;
+            arc.visible = intensity > 0.2;
+
+            if (branchPoints.length > 1) {
+                branch.geometry.dispose();
+                branch.geometry = new THREE.BufferGeometry().setFromPoints(branchPoints);
+                branch.material.opacity = 0.18 + intensity * 0.44;
+                branch.visible = intensity > 0.2;
+            } else {
+                branch.visible = false;
+            }
+        });
+    }
+
+    function setHeadPose(time, blink, deltaSeconds, breath) {
         head.position.copy(spine[0]);
-        head.position.y += Math.sin(gaitDistance * 5.2) * movementEnergy * 0.025;
+        const sniffProgress = Math.max(0, Math.min(1, (time - sniffStartedAt) / sniffDuration));
+        const sniff = Math.sin(sniffProgress * Math.PI);
+        head.position.y += Math.sin(time * 0.0034) * movementEnergy * 0.006
+            + breath * 0.004 - sniff * 0.02;
         head.quaternion.setFromUnitVectors(forwardAxis, heading);
+        const targetAngle = Math.atan2(cursorWorld.z - spine[0].z, cursorWorld.x - spine[0].x);
+        const headingAngle = Math.atan2(heading.z, heading.x);
+        const angleDifference = Math.atan2(
+            Math.sin(targetAngle - headingAngle),
+            Math.cos(targetAngle - headingAngle)
+        );
+        const desiredLookYaw = pointerSeen ? Math.max(-0.48, Math.min(0.48, -angleDifference)) : 0;
+        headLookYaw += (desiredLookYaw - headLookYaw) * (1 - Math.exp(-2.8 * deltaSeconds));
+        const curiosityProgress = Math.max(0, Math.min(1, (time - curiosityStartedAt) / curiosityDuration));
+        const curiosity = Math.sin(curiosityProgress * Math.PI);
+        const tilt = reducedMotion ? 0 : curiosity * curiosityTilt;
+        const gaitPhase = gaitDistance / strideLength * Math.PI * 2;
+        const nod = reducedMotion ? 0 : Math.sin(gaitPhase) * 0.025 * movementEnergy;
+        head.quaternion.multiply(headRotation.setFromAxisAngle(yawAxis, headLookYaw));
+        head.quaternion.multiply(headRotation.setFromAxisAngle(pitchAxis, nod - sniff * 0.11));
+        head.quaternion.multiply(headRotation.setFromAxisAngle(rollAxis, tilt));
         if (!reducedMotion) {
-            const nod = Math.sin(gaitDistance * 5.2) * 0.045 * movementEnergy;
-            head.quaternion.multiply(new THREE.Quaternion().setFromAxisAngle(
-                new THREE.Vector3(0, 0, 1),
-                nod
+            head.quaternion.multiply(headRotation.setFromAxisAngle(
+                pitchAxis,
+                Math.sin(time * 0.0017) * 0.008
             ));
         }
-        const jawPulse = reducedMotion ? 0 : Math.sin(time * 1.5) * 0.018;
+        const jawPulse = reducedMotion ? 0 : Math.sin(time * 0.0015) * 0.009 + sniff * 0.012;
         const jawLeftHinge = new THREE.Vector3(0.02, -0.11, -0.18);
         const jawRightHinge = new THREE.Vector3(0.02, -0.11, 0.18);
         const jawLeftFront = new THREE.Vector3(0.57, -0.12 - jawPulse, -0.12);
@@ -624,7 +734,9 @@ try {
             fang.position.y = -0.16 - jawPulse;
         });
 
-        const wave = reducedMotion ? 0 : Math.sin(time * 0.8) * 0.035;
+        const wave = reducedMotion
+            ? 0
+            : Math.sin(time * 0.0009) * 0.025 + Math.sin(time * 0.0017 + 1.2) * 0.012 - sniff * 0.045;
         const antennaRoots = [
             new THREE.Vector3(0.24, 0.22, -0.16),
             new THREE.Vector3(0.24, 0.22, 0.16)
@@ -643,8 +755,10 @@ try {
             antennaTips[sideIndex].mesh.position.copy(tip);
         });
         antennaLight.position.set(0.92, 0.56 + wave, 0);
-        antennaGlowMaterial.emissiveIntensity = 0.46
-            + (reducedMotion ? 0 : Math.sin(time * 1.3) * 0.05);
+        const antennaCharge = pointerSeen ? 0.68 + movementEnergy * 1.1 : 0.26;
+        updateAntennaShock(time, wave, antennaCharge);
+        antennaGlowMaterial.emissiveIntensity = 0.46 + antennaCharge * 0.4
+            + (reducedMotion ? 0 : Math.sin(time * 0.0013) * 0.05);
     }
 
     function worldPointer(event) {
@@ -662,10 +776,11 @@ try {
             lastPointerWorld.copy(hitPoint);
             pointerSeen = true;
             lastPointerMove = performance.now();
+            pauseUntil = 0;
         }
     }
 
-    canvas.addEventListener("pointermove", worldPointer);
+    window.addEventListener("pointermove", worldPointer, { passive: true });
 
     function resize() {
         const width = window.innerWidth;
@@ -676,24 +791,35 @@ try {
     }
     window.addEventListener("resize", resize);
 
-    function updateSpine(deltaSeconds) {
+    function updateSpine(deltaSeconds, time, breath) {
         pointerDirection.lerp(
             targetPointerDirection,
-            1 - Math.exp(-1.8 * deltaSeconds)
+            1 - Math.exp(-5 * deltaSeconds)
         ).normalize();
-        const target = cursorWorld.clone().addScaledVector(pointerDirection, -0.72);
+        const pointerIdleFor = time - lastPointerMove;
+        if (pointerSeen && pointerIdleFor > 700 && time >= nextPauseAt) {
+            pauseUntil = time + 320 + Math.random() * 420;
+            nextPauseAt = time + 5800 + Math.random() * 7200;
+        }
+        const target = pointerSeen
+            ? cursorWorld.clone().addScaledVector(pointerDirection, -0.18)
+            : spine[0].clone();
+        if (time < pauseUntil) target.copy(spine[0]);
         target.y = 0.22;
         const previousHead = spine[0].clone();
-        const ease = 1 - Math.exp(-2.1 * deltaSeconds);
-        spine[0].lerp(target, ease);
+        const spring = target.clone().sub(spine[0]);
+        movementVelocity.x += (spring.x * 18 - movementVelocity.x * 7.5) * deltaSeconds;
+        movementVelocity.z += (spring.z * 18 - movementVelocity.z * 7.5) * deltaSeconds;
+        if (movementVelocity.length() > 2.6) movementVelocity.setLength(2.6);
+        spine[0].addScaledVector(movementVelocity, deltaSeconds);
         const movement = spine[0].clone().sub(previousHead);
-        if (movement.lengthSq() > 0.00001) {
-            const desiredHeading = movement.normalize();
+        if (movement.lengthSq() > 0.000004) {
+            const desiredHeading = movement.clone().normalize();
             desiredHeading.y = 0;
-            heading.lerp(desiredHeading.normalize(), 1 - Math.exp(-1.7 * deltaSeconds)).normalize();
+            heading.lerp(desiredHeading.normalize(), 1 - Math.exp(-3.4 * deltaSeconds)).normalize();
         }
         const speed = previousHead.distanceTo(spine[0]) / Math.max(deltaSeconds, 0.001);
-        const targetEnergy = Math.min(0.82, speed / 2.8);
+        const targetEnergy = Math.min(0.62, speed / 2.5);
         const energyRate = targetEnergy > movementEnergy ? 2.2 : 1.05;
         movementEnergy += (targetEnergy - movementEnergy) * (1 - Math.exp(-energyRate * deltaSeconds));
         gaitDistance += previousHead.distanceTo(spine[0]);
@@ -769,27 +895,59 @@ try {
                 }
             }
 
-            const bodyWave = reducedMotion ? 0 : Math.sin(gaitDistance * 5.2 - index * 0.32);
-            const idleBreath = reducedMotion ? 0 : Math.sin(performance.now() * 0.0015 - index * 0.12);
+            const rearWeight = index / (spine.length - 1);
+            const bodyPhase = gaitDistance / strideLength * Math.PI * 2 - index * 0.2;
+            const bodySway = reducedMotion
+                ? 0
+                : Math.sin(bodyPhase) * 0.001 * Math.pow(rearWeight, 1.35)
+                    * Math.min(1, movementEnergy / 0.35);
+            const bodyLift = reducedMotion
+                ? 0
+                : Math.sin(bodyPhase * 2 - 0.4) * movementEnergy * 0.0003;
+            const musclePulse = musclePulses[index];
+            const sideX = -Math.sin(bestAngle);
+            const sideZ = Math.cos(bestAngle);
             spine[index].set(
-                previous.x + Math.cos(bestAngle) * segmentSpacing,
-                0.22 + bodyWave * movementEnergy * 0.025 + idleBreath * 0.006,
-                previous.z + Math.sin(bestAngle) * segmentSpacing
+                previous.x + Math.cos(bestAngle) * segmentSpacing + sideX * (bodySway + musclePulse),
+                0.22 + bodyLift + breath * 0.001 - Math.abs(musclePulse) * 0.08,
+                previous.z + Math.sin(bestAngle) * segmentSpacing + sideZ * (bodySway + musclePulse)
             );
         }
     }
 
     function updateCreature(time, deltaSeconds) {
-        updateSpine(deltaSeconds);
-        if (!reducedMotion) {
-            spineLightProgress = (spineLightProgress + deltaSeconds / 7.5) % 1;
+        const emergenceProgress = reducedMotion
+            ? 1
+            : Math.max(0, Math.min(1, (time - emergenceStartedAt) / 2800));
+        const emergenceEase = emergenceProgress * emergenceProgress * (3 - 2 * emergenceProgress);
+        creatureRoot.position.y = -1.05 * (1 - emergenceEase);
+        creatureRoot.scale.setScalar(0.96 + 0.04 * emergenceEase);
+        const breath = reducedMotion ? 0 : Math.sin(time * 0.00165);
+        if (!reducedMotion && time >= nextMuscleAt) {
+            muscleStartedAt = time;
+            muscleDuration = 420 + Math.random() * 280;
+            muscleRecoil = Math.random() < 0.28;
+            muscleCenter = muscleRecoil
+                ? 6 + Math.random() * 12
+                : 7 + Math.random() * (ribCount - 14);
+            muscleWidth = muscleRecoil ? 4.5 : 2.4 + Math.random() * 1.4;
+            muscleStrength = (0.001 + Math.random() * 0.0008) * (Math.random() < 0.5 ? -1 : 1);
+            nextMuscleAt = time + 6500 + Math.random() * 9000;
         }
-        const lightPosition = spineLightProgress * (ribCount - 1);
-        const lightIndex = Math.floor(lightPosition);
-        const lightFraction = lightPosition - lightIndex;
-        const lightNextIndex = Math.min(ribCount - 1, lightIndex + 1);
-        travelingSpineLight.position.lerpVectors(spine[lightIndex], spine[lightNextIndex], lightFraction);
-        travelingSpineLight.position.y += 0.2;
+        const muscleProgress = (time - muscleStartedAt) / muscleDuration;
+        if (!reducedMotion && muscleProgress >= 0 && muscleProgress <= 1) {
+            const twitch = Math.sin(muscleProgress * Math.PI * (muscleRecoil ? 2 : 3))
+                * Math.sin(muscleProgress * Math.PI)
+                * Math.exp(-muscleProgress * 0.35)
+                * muscleStrength;
+            for (let index = 0; index < musclePulses.length; index++) {
+                const distance = (index - muscleCenter) / muscleWidth;
+                musclePulses[index] = twitch * Math.exp(-0.5 * distance * distance);
+            }
+        } else {
+            musclePulses.fill(0);
+        }
+        updateSpine(deltaSeconds, time, breath);
         for (let index = 0; index < spineBones.length; index++) {
             placeBone(spineBones[index], spine[index], spine[index + 1]);
             spineJoints[index].position.copy(spine[index]);
@@ -805,14 +963,14 @@ try {
             const sideAxis = new THREE.Vector3(-tangent.z, 0, tangent.x);
             const position = section.index / (ribCount - 1);
             const taper = 1 - Math.max(0, position - 0.58) * 1.35;
-            const breath = 1 + Math.sin(time * 0.0015 - section.index * 0.13) * 0.018;
+            const breathing = 1 + breath * 0.001;
+            const contraction = Math.abs(musclePulses[section.index]);
             section.flesh.position.set(base.x, base.y - 0.09, base.z);
             section.flesh.rotation.y = yaw;
-            section.flesh.scale.y = 0.18 * taper * breath;
-            const lightDistance = section.index - lightPosition;
+            section.flesh.scale.y = 0.18 * taper * breathing * (1 - contraction * 0.5);
+            section.flesh.scale.z = 0.38 * taper * breathing * (1 - contraction * 0.2);
             section.dorsal.material.emissive.setHex(0xb9662d);
-            section.dorsal.material.emissiveIntensity = 0.015
-                + 0.82 * Math.exp(-(lightDistance * lightDistance) / 12);
+            section.dorsal.material.emissiveIntensity = 0.04;
             section.dorsal.position.set(base.x - tangent.x * 0.015, base.y + 0.075, base.z - tangent.z * 0.015);
             section.dorsal.rotation.set(0, yaw, -0.16);
             section.sidePlates.forEach((plate, sideIndex) => {
@@ -847,8 +1005,9 @@ try {
             const taper = position < 0.78
                 ? 1 - Math.max(0, position - 0.52) * 1.05
                 : 0.51 - (position - 0.78) * 1.5;
-            const breath = 1 + Math.sin(time * 1.25) * 0.018;
-            const width = Math.max(0.09, 0.37 * taper * breath);
+            const breathing = 1 + breath * 0.001;
+            const musclePulse = musclePulses[rib.index];
+            const width = Math.max(0.09, 0.37 * taper * breathing * (1 - Math.abs(musclePulse) * 0.2));
             const top = base.clone().add(new THREE.Vector3(0, 0.01, 0));
             const tips = [];
             rib.sides.forEach((bones, sideIndex) => {
@@ -856,7 +1015,7 @@ try {
                 const shoulder = top.clone()
                     .addScaledVector(tangent, -0.045)
                     .add(new THREE.Vector3(0, -0.08, 0))
-                    .addScaledVector(sideAxis, side * width * 0.7);
+                    .addScaledVector(sideAxis, side * (width * 0.7 + musclePulse * 0.2));
                 const tip = top.clone()
                     .addScaledVector(tangent, -0.13)
                     .add(new THREE.Vector3(0, -0.43 * taper, 0))
@@ -875,22 +1034,24 @@ try {
             const after = spine[Math.min(spine.length - 1, leg.index + 1)];
             const tangent = before.clone().sub(after).setY(0).normalize();
             const sideAxis = new THREE.Vector3(-tangent.z, 0, tangent.x);
-            const strideLength = 0.78;
-            const cycle = ((gaitDistance / strideLength + leg.pair * 0.18 + (leg.side < 0 ? 0 : 0.5)) % 1 + 1) % 1;
+            const legGaitRate = 1.5;
+            const cycle = ((gaitDistance / strideLength * legGaitRate + leg.pair * 0.12 + (leg.side < 0 ? 0 : 0.5)) % 1 + 1) % 1;
             const stanceRatio = 0.62;
+            const stanceStride = strideLength * stanceRatio;
             let step;
             let lift = 0;
             if (cycle < stanceRatio) {
                 const stanceProgress = cycle / stanceRatio;
-                step = (0.5 - stanceProgress) * strideLength * 0.78;
+                step = (0.5 - stanceProgress) * stanceStride;
             } else {
                 const progress = (cycle - stanceRatio) / (1 - stanceRatio);
                 const eased = progress * progress * (3 - 2 * progress);
-                step = (-0.5 + eased) * strideLength * 0.78;
-                lift = Math.sin(progress * Math.PI) * 0.18;
+                step = (-0.5 + eased) * stanceStride;
+                lift = Math.sin(progress * Math.PI) * 0.28;
             }
-            step *= movementEnergy;
-            lift *= movementEnergy;
+            const gaitBlend = Math.min(1, movementEnergy / 0.55);
+            step *= gaitBlend;
+            lift *= gaitBlend;
             const hip = base.clone().add(new THREE.Vector3(0, 0.04, 0))
                 .addScaledVector(sideAxis, leg.side * 0.12);
             const coxaEnd = base.clone()
@@ -903,7 +1064,7 @@ try {
                 .addScaledVector(sideAxis, leg.side * 0.43);
             const foot = base.clone()
                 .addScaledVector(tangent, step + 0.06)
-                .add(new THREE.Vector3(0, -0.88 - lift, 0))
+                .add(new THREE.Vector3(0, -1.02 + lift, 0))
                 .addScaledVector(sideAxis, leg.side * 0.58);
             placeBone(leg.coxa, hip, coxaEnd);
             placeBone(leg.upper, coxaEnd, knee);
@@ -916,7 +1077,7 @@ try {
                 const toeTip = foot.clone()
                     .addScaledVector(tangent, 0.2)
                     .addScaledVector(sideAxis, leg.side * 0.09 + offset * 0.065)
-                    .add(new THREE.Vector3(0, -0.075, 0));
+                    .add(new THREE.Vector3(0, -0.035, 0));
                 placeBone(leg.toes[index], foot, toeTip);
             });
         }
@@ -959,14 +1120,26 @@ try {
             placeBone(section.spine, spikeBase, spikeTip);
         }
 
+        const idleFor = performance.now() - lastPointerMove;
+        const isIdle = !pointerSeen || idleFor > 1200;
+        if (!reducedMotion && isIdle && time >= nextCuriosityAt) {
+            curiosityStartedAt = time;
+            curiosityDuration = 1100 + Math.random() * 1100;
+            curiosityTilt = (Math.random() < 0.5 ? -1 : 1) * (0.1 + Math.random() * 0.08);
+            nextCuriosityAt = time + 4200 + Math.random() * 5600;
+        }
+        if (!reducedMotion && isIdle && time >= nextSniffAt) {
+            sniffStartedAt = time;
+            sniffDuration = 620 + Math.random() * 280;
+            nextSniffAt = time + 9500 + Math.random() * 6500;
+        }
         const blinkDuration = 170;
-        const blink = Math.max(0, 1 - Math.abs(time - blinkStartedAt) / blinkDuration);
         if (time >= nextBlinkAt) {
             blinkStartedAt = time;
-            nextBlinkAt = time + 2600 + Math.random() * 3300;
+            nextBlinkAt = time + (Math.random() < 0.16 ? 260 : 3100 + Math.random() * 3900);
         }
-        setHeadPose(time / 1000, blink);
-        const idleFor = performance.now() - lastPointerMove;
+        const blink = Math.max(0, 1 - Math.abs(time - blinkStartedAt) / blinkDuration);
+        setHeadPose(time, blink, deltaSeconds, breath);
         stateLabel.textContent = !pointerSeen
             ? "Waiting for you"
             : idleFor > 500 ? "Watching quietly" : movementEnergy > 0.2 ? "Scurrying along" : "Following you";
@@ -979,6 +1152,7 @@ try {
         previousTime = timestamp;
         updateCreature(timestamp, deltaSeconds);
         cameraFocus.copy(spine[0]).add(spine[spine.length - 1]).multiplyScalar(0.5);
+        cameraFocus.add(creatureRoot.position);
         cameraFocus.y = 0;
         cameraPosition.copy(cameraFocus).add(cameraOffset);
         camera.position.lerp(cameraPosition, 1 - Math.exp(-1.1 * deltaSeconds));
