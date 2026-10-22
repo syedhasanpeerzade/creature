@@ -600,75 +600,46 @@ try {
         head.add(tip);
         return { side, mesh: tip };
     });
-    const antennaShock = [-1, 1].map((side, index) => {
+    const antennaShock = Array.from({ length: 5 }, (_, index) => {
         const arc = new THREE.Line(
             new THREE.BufferGeometry(),
             new THREE.LineBasicMaterial({
-                color: 0x7cf5ff,
+                color: index % 2 === 0 ? 0x7cf5ff : 0xffd36f,
                 transparent: true,
-                opacity: 0.55,
+                opacity: 0.8,
                 blending: THREE.AdditiveBlending
             })
         );
         arc.frustumCulled = false;
         head.add(arc);
-        const branch = new THREE.Line(
-            new THREE.BufferGeometry(),
-            new THREE.LineBasicMaterial({
-                color: 0xffd36f,
-                transparent: true,
-                opacity: 0.4,
-                blending: THREE.AdditiveBlending
-            })
-        );
-        branch.frustumCulled = false;
-        head.add(branch);
-        return { side, phase: index * 1.8 + Math.random() * 3.2, arc, branch };
+        return { phase: index * 2.1 + Math.random() * 3.2, arc };
     });
     head.add(...headBones, ...headJoints, ...antennaBones, ...antennaJoints);
 
     let headLookYaw = 0;
 
-    function updateAntennaShock(time, wave, stiffness) {
-        antennaShock.forEach(({ side, phase, arc, branch }) => {
-            const root = new THREE.Vector3(0.24, 0.22, side * 0.16);
-            const bend = new THREE.Vector3(0.4, 0.4 + wave, side * 0.25);
-            const outer = new THREE.Vector3(0.78, 0.56 + wave * 1.4, side * 0.46);
-            const tip = new THREE.Vector3(1.32, 0.62 + wave * 1.8, side * 0.63);
-            const points = [];
-            const branchPoints = [];
+    function updateAntennaShock(time, stiffness) {
+        antennaShock.forEach(({ phase, arc }, index) => {
+            const start = antennaTips[0].mesh.position;
+            const end = antennaTips[1].mesh.position;
             const intensity = Math.max(0.12, stiffness * 0.9 + 0.18);
-
-            for (let step = 0; step <= 14; step++) {
-                const t = step / 14;
-                const path = new THREE.Vector3().lerpVectors(root, tip, t);
-                path.x += Math.sin(t * Math.PI * 3 + time * 0.02 + phase) * 0.09 * intensity;
-                path.y += Math.sin(t * 8 + time * 0.016 + phase) * (0.08 + intensity * 0.18);
-                path.z += side * (Math.sin(t * 9 + phase * 1.4) * 0.12 + 0.04 * intensity);
-                points.push(path);
-
-                if (step > 4 && step < 11 && Math.sin((t * 12) + phase + time * 0.01) > 0.7) {
-                    const branchPoint = path.clone();
-                    branchPoint.x += side * 0.18;
-                    branchPoint.y += 0.12;
-                    branchPoint.z += side * 0.24;
-                    branchPoints.push(branchPoint);
+            const flicker = reducedMotion ? 1 : Math.max(0, Math.sin(time * 0.035 + phase));
+            const centerT = 0.28 + index * 0.11;
+            const gap = new THREE.Vector3().subVectors(end, start);
+            const center = new THREE.Vector3().lerpVectors(start, end, centerT);
+            const points = [-1, -0.42, 0.08, 0.48, 1].map((offset, pointIndex) => {
+                const point = center.clone().addScaledVector(gap, offset * 0.045);
+                if (pointIndex > 0 && pointIndex < 4) {
+                    point.x += Math.sin(time * 0.06 + phase + pointIndex * 2.4) * 0.045;
+                    point.y += Math.cos(time * 0.05 + phase + pointIndex * 1.7) * 0.045;
                 }
-            }
+                return point;
+            });
 
             arc.geometry.dispose();
             arc.geometry = new THREE.BufferGeometry().setFromPoints(points);
-            arc.material.opacity = 0.25 + intensity * 0.65;
-            arc.visible = intensity > 0.2;
-
-            if (branchPoints.length > 1) {
-                branch.geometry.dispose();
-                branch.geometry = new THREE.BufferGeometry().setFromPoints(branchPoints);
-                branch.material.opacity = 0.18 + intensity * 0.44;
-                branch.visible = intensity > 0.2;
-            } else {
-                branch.visible = false;
-            }
+            arc.material.opacity = 0.25 + flicker * intensity * 0.65;
+            arc.visible = intensity > 0.2 && (reducedMotion ? index === 2 : flicker > 0.35);
         });
     }
 
@@ -756,7 +727,7 @@ try {
         });
         antennaLight.position.set(0.92, 0.56 + wave, 0);
         const antennaCharge = pointerSeen ? 0.68 + movementEnergy * 1.1 : 0.26;
-        updateAntennaShock(time, wave, antennaCharge);
+        updateAntennaShock(time, antennaCharge);
         antennaGlowMaterial.emissiveIntensity = 0.46 + antennaCharge * 0.4
             + (reducedMotion ? 0 : Math.sin(time * 0.0013) * 0.05);
     }
