@@ -504,29 +504,6 @@ try {
     });
     const tailLight = new THREE.PointLight(0xc84c20, 1, 3.2, 2);
     creatureRoot.add(tailLight);
-    const spineLight = new THREE.Group();
-    const spineLightCore = new THREE.Mesh(
-        new THREE.SphereGeometry(0.055, 12, 10),
-        new THREE.MeshStandardMaterial({
-            color: 0xffa04d,
-            emissive: 0xff7428,
-            emissiveIntensity: 3.2,
-            roughness: 0.28
-        })
-    );
-    const spineLightHalo = new THREE.Mesh(
-        new THREE.SphereGeometry(0.15, 12, 10),
-        new THREE.MeshBasicMaterial({
-            color: 0xff7428,
-            transparent: true,
-            opacity: 0.2,
-            depthWrite: false
-        })
-    );
-    spineLight.add(spineLightCore, spineLightHalo);
-    creatureRoot.add(spineLight);
-    const spinePointLight = new THREE.PointLight(0xff7428, 2.4, 2.2, 2);
-    creatureRoot.add(spinePointLight);
     const head = new THREE.Group();
     creatureRoot.add(head);
     head.add(antennaLight);
@@ -1023,16 +1000,16 @@ try {
             if (rib.crossbar) placeBone(rib.crossbar, tips[0], tips[1]);
         }
 
+        const legStride = 0.74;
         for (const leg of legs) {
             const base = spine[leg.index];
             const before = spine[Math.max(0, leg.index - 1)];
             const after = spine[Math.min(spine.length - 1, leg.index + 1)];
             const tangent = before.clone().sub(after).setY(0).normalize();
             const sideAxis = new THREE.Vector3(-tangent.z, 0, tangent.x);
-            const legGaitRate = 1.5;
-            const cycle = ((gaitDistance / strideLength * legGaitRate + leg.pair * 0.12 + (leg.side < 0 ? 0 : 0.5)) % 1 + 1) % 1;
-            const stanceRatio = 0.62;
-            const stanceStride = strideLength * stanceRatio;
+            const cycle = ((gaitDistance / legStride + leg.pair * 0.18 + (leg.side > 0 ? 0.08 : 0)) % 1 + 1) % 1;
+            const stanceRatio = 0.66;
+            const stanceStride = legStride;
             let step;
             let lift = 0;
             if (cycle < stanceRatio) {
@@ -1055,11 +1032,11 @@ try {
                 .addScaledVector(sideAxis, leg.side * 0.27);
             const knee = base.clone()
                 .addScaledVector(tangent, step * 0.55 - 0.06)
-                .add(new THREE.Vector3(0, -0.29 - lift * 0.4, 0))
+                .add(new THREE.Vector3(0, -0.29 + lift * 0.35, 0))
                 .addScaledVector(sideAxis, leg.side * 0.43);
             const foot = base.clone()
                 .addScaledVector(tangent, step + 0.06)
-                .add(new THREE.Vector3(0, -1.02 + lift, 0))
+                .add(new THREE.Vector3(0, -0.79 + lift, 0))
                 .addScaledVector(sideAxis, leg.side * 0.58);
             placeBone(leg.coxa, hip, coxaEnd);
             placeBone(leg.upper, coxaEnd, knee);
@@ -1092,30 +1069,18 @@ try {
             if (tailJoints[index - 1]) tailJoints[index - 1].position.copy(tailPoints[index - 1]);
         }
         const spineLightStart = 6;
-        const spineLightSegments = spine.length - 1 - spineLightStart + tailCount;
+        const spineLightEnd = spine.length - 5;
+        const spineLightSegments = spineLightEnd - spineLightStart;
         const spineLightProgress = reducedMotion
             ? 0
             : ((time - spineLightStartedAt) % 4200) / 4200;
-        const spineLightStep = spineLightProgress * spineLightSegments;
-        let spineLightPosition;
-        if (spineLightStep < spine.length - 1 - spineLightStart) {
-            const segment = Math.floor(spineLightStep);
-            const from = spine[spineLightStart + segment];
-            const to = spine[spineLightStart + segment + 1];
-            spineLightPosition = from.clone().lerp(to, spineLightStep - segment);
-        } else {
-            const tailStep = spineLightStep - (spine.length - 1 - spineLightStart);
-            const segment = Math.min(Math.floor(tailStep), tailCount - 1);
-            const from = tailPoints[segment];
-            const to = tailPoints[segment + 1];
-            spineLightPosition = from.clone().lerp(to, tailStep - segment);
+        const spineLightIndex = spineLightStart + spineLightProgress * spineLightSegments;
+        for (const section of bodySections) {
+            const distance = (section.index - spineLightIndex) / 2;
+            const glow = Math.exp(-0.5 * distance * distance);
+            section.dorsal.material.emissive.setHex(0xb94f1e);
+            section.dorsal.material.emissiveIntensity = 0.025 + glow * 0.62;
         }
-        spineLightPosition.y += 0.27;
-        spineLight.position.copy(spineLightPosition);
-        spinePointLight.position.copy(spineLightPosition);
-        const spineLightPulse = reducedMotion ? 1 : 0.86 + Math.sin(time * 0.008) * 0.14;
-        spineLight.scale.setScalar(spineLightPulse);
-        spinePointLight.intensity = 2.4 * spineLightPulse;
         for (const lantern of tailLanterns) {
             lantern.mesh.position.copy(tailPoints[lantern.index]);
             lantern.mesh.position.y += 0.035 * (1 - lantern.index / (tailCount + 1));
