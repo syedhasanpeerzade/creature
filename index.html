@@ -275,6 +275,7 @@ try {
 
     const up = new THREE.Vector3(0, 1, 0);
     const forwardAxis = new THREE.Vector3(1, 0, 0);
+    const headForward = new THREE.Vector3();
     const yawAxis = new THREE.Vector3(0, 1, 0);
     const pitchAxis = new THREE.Vector3(0, 0, 1);
     const rollAxis = new THREE.Vector3(1, 0, 0);
@@ -316,6 +317,9 @@ try {
     let nextSniffAt = 9000;
     let sniffStartedAt = -10000;
     let sniffDuration = 1;
+    let nextBiteAt = 0;
+    let biteStartedAt = -10000;
+    const biteDuration = 440;
 
     function makeBone(radius = 0.022, material = boneMaterial) {
         const mesh = new THREE.Mesh(
@@ -644,21 +648,23 @@ try {
         });
     }
 
-    function setHeadPose(time, blink, deltaSeconds, breath) {
+    function setHeadPose(time, blink, deltaSeconds, breath, bite) {
         head.position.copy(spine[0]);
         const sniffProgress = Math.max(0, Math.min(1, (time - sniffStartedAt) / sniffDuration));
         const sniff = Math.sin(sniffProgress * Math.PI);
         head.position.y += Math.sin(time * 0.0034) * movementEnergy * 0.006
             + breath * 0.004 - sniff * 0.02;
-        head.quaternion.setFromUnitVectors(forwardAxis, heading);
+        headForward.copy(spine[0]).sub(spine[1]).setY(0).normalize();
+        head.quaternion.setFromUnitVectors(forwardAxis, headForward);
+        head.position.addScaledVector(headForward, bite * 0.28);
         const targetAngle = Math.atan2(cursorWorld.z - spine[0].z, cursorWorld.x - spine[0].x);
-        const headingAngle = Math.atan2(heading.z, heading.x);
+        const headingAngle = Math.atan2(headForward.z, headForward.x);
         const angleDifference = Math.atan2(
             Math.sin(targetAngle - headingAngle),
             Math.cos(targetAngle - headingAngle)
         );
         const desiredLookYaw = pointerSeen ? Math.max(-0.48, Math.min(0.48, -angleDifference)) : 0;
-        headLookYaw += (desiredLookYaw - headLookYaw) * (1 - Math.exp(-2.8 * deltaSeconds));
+        headLookYaw += (desiredLookYaw - headLookYaw) * (1 - Math.exp(-6.5 * deltaSeconds));
         const curiosityProgress = Math.max(0, Math.min(1, (time - curiosityStartedAt) / curiosityDuration));
         const curiosity = Math.sin(curiosityProgress * Math.PI);
         const tilt = reducedMotion ? 0 : curiosity * curiosityTilt;
@@ -673,7 +679,9 @@ try {
                 Math.sin(time * 0.0017) * 0.008
             ));
         }
-        const jawPulse = reducedMotion ? 0 : Math.sin(time * 0.0015) * 0.009 + sniff * 0.012;
+        const jawPulse = reducedMotion ? 0 : Math.sin(time * 0.0015) * 0.009 + sniff * 0.012 + bite * 0.075;
+        maw.scale.y = 0.46 + bite * 0.28;
+        maw.position.y = -0.125 - bite * 0.035;
         const jawLeftHinge = new THREE.Vector3(0.02, -0.11, -0.18);
         const jawRightHinge = new THREE.Vector3(0.02, -0.11, 0.18);
         const jawLeftFront = new THREE.Vector3(0.57, -0.12 - jawPulse, -0.12);
@@ -766,7 +774,7 @@ try {
     function updateSpine(deltaSeconds, time, breath) {
         pointerDirection.lerp(
             targetPointerDirection,
-            1 - Math.exp(-5 * deltaSeconds)
+            1 - Math.exp(-11 * deltaSeconds)
         ).normalize();
         const pointerIdleFor = time - lastPointerMove;
         if (pointerSeen && pointerIdleFor > 700 && time >= nextPauseAt) {
@@ -774,21 +782,21 @@ try {
             nextPauseAt = time + 5800 + Math.random() * 7200;
         }
         const target = pointerSeen
-            ? cursorWorld.clone().addScaledVector(pointerDirection, -0.18)
+            ? cursorWorld.clone().addScaledVector(pointerDirection, -0.5)
             : spine[0].clone();
         if (time < pauseUntil) target.copy(spine[0]);
         target.y = 0.22;
         const previousHead = spine[0].clone();
         const spring = target.clone().sub(spine[0]);
-        movementVelocity.x += (spring.x * 18 - movementVelocity.x * 7.5) * deltaSeconds;
-        movementVelocity.z += (spring.z * 18 - movementVelocity.z * 7.5) * deltaSeconds;
-        if (movementVelocity.length() > 2.6) movementVelocity.setLength(2.6);
+        movementVelocity.x += (spring.x * 32 - movementVelocity.x * 10) * deltaSeconds;
+        movementVelocity.z += (spring.z * 32 - movementVelocity.z * 10) * deltaSeconds;
+        if (movementVelocity.length() > 4.5) movementVelocity.setLength(4.5);
         spine[0].addScaledVector(movementVelocity, deltaSeconds);
         const movement = spine[0].clone().sub(previousHead);
         if (movement.lengthSq() > 0.000004) {
             const desiredHeading = movement.clone().normalize();
             desiredHeading.y = 0;
-            heading.lerp(desiredHeading.normalize(), 1 - Math.exp(-3.4 * deltaSeconds)).normalize();
+            heading.lerp(desiredHeading.normalize(), 1 - Math.exp(-7.5 * deltaSeconds)).normalize();
         }
         const speed = previousHead.distanceTo(spine[0]) / Math.max(deltaSeconds, 0.001);
         const targetEnergy = Math.min(0.62, speed / 2.5);
@@ -803,7 +811,7 @@ try {
                 : spine[index - 2].clone().sub(previous).normalize();
             const backward = direction.clone().negate();
             const desired = previous.clone().addScaledVector(backward, segmentSpacing);
-            spine[index].lerp(desired, 1 - Math.exp(-5.2 * deltaSeconds));
+            spine[index].lerp(desired, 1 - Math.exp(-8 * deltaSeconds));
             const offset = spine[index].clone().sub(previous);
             if (offset.lengthSq() < 0.000001) offset.copy(backward);
             const referenceAngle = Math.atan2(backward.z, backward.x);
@@ -1124,8 +1132,19 @@ try {
             nextBlinkAt = time + (Math.random() < 0.16 ? 260 : 3100 + Math.random() * 3900);
         }
         const blink = Math.max(0, 1 - Math.abs(time - blinkStartedAt) / blinkDuration);
-        setHeadPose(time, blink, deltaSeconds, breath);
-        stateLabel.textContent = !pointerSeen
+        const cursorDistance = Math.hypot(cursorWorld.x - spine[0].x, cursorWorld.z - spine[0].z);
+        if (!reducedMotion && pointerSeen && cursorDistance < 1.8 && time >= nextBiteAt) {
+            biteStartedAt = time;
+            nextBiteAt = time + 850;
+        }
+        const biteProgress = (time - biteStartedAt) / biteDuration;
+        const bite = !reducedMotion && biteProgress >= 0 && biteProgress <= 1
+            ? Math.sin(biteProgress * Math.PI)
+            : 0;
+        setHeadPose(time, blink, deltaSeconds, breath, bite);
+        stateLabel.textContent = bite > 0.3
+            ? "Trying to eat the cursor"
+            : !pointerSeen
             ? "Waiting for you"
             : idleFor > 500 ? "Watching quietly" : movementEnergy > 0.2 ? "Scurrying along" : "Following you";
     }
