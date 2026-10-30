@@ -166,22 +166,57 @@ try {
     const camera = new THREE.PerspectiveCamera(36, window.innerWidth / window.innerHeight, 0.1, 100);
     camera.zoom = 1;
     camera.updateProjectionMatrix();
-    camera.position.set(-1.4, 6.5, 10.5);
+    camera.position.set(-1.4, 7.4, 12.2);
     camera.lookAt(-1.4, 0, 0);
-    const cameraOffset = new THREE.Vector3(0, 6.5, 10.5);
+    const cameraOffset = new THREE.Vector3(0, 7.4, 12.2);
     const cameraFocus = new THREE.Vector3(-1.4, 0, 0);
     const cameraPosition = new THREE.Vector3();
 
+    const textureSize = 128;
+    const textureData = new Uint8Array(textureSize * textureSize * 4);
+    for (let y = 0; y < textureSize; y++) {
+        for (let x = 0; x < textureSize; x++) {
+            const broad = Math.sin(x * 0.08 + Math.sin(y * 0.045) * 1.8)
+                * Math.sin(y * 0.07 + Math.cos(x * 0.04) * 1.5);
+            const fine = Math.sin(x * 0.32 + Math.sin(y * 0.17))
+                * Math.cos(y * 0.29 + Math.sin(x * 0.13));
+            const grain = Math.sin(x * 12.9898 + y * 78.233) * 43758.5453;
+            const value = Math.max(0, Math.min(255,
+                128 + broad * 20 + fine * 9 + (grain - Math.floor(grain)) * 12 - 6
+            ));
+            const offset = (y * textureSize + x) * 4;
+            textureData[offset] = value;
+            textureData[offset + 1] = value;
+            textureData[offset + 2] = value;
+            textureData[offset + 3] = 255;
+        }
+    }
+    const surfaceTexture = new THREE.DataTexture(
+        textureData,
+        textureSize,
+        textureSize,
+        THREE.RGBAFormat
+    );
+    surfaceTexture.wrapS = THREE.RepeatWrapping;
+    surfaceTexture.wrapT = THREE.RepeatWrapping;
+    surfaceTexture.repeat.set(2, 2);
+    surfaceTexture.magFilter = THREE.LinearFilter;
+    surfaceTexture.minFilter = THREE.LinearMipmapLinearFilter;
+    surfaceTexture.generateMipmaps = true;
+    surfaceTexture.needsUpdate = true;
+
     const boneMaterial = new THREE.MeshStandardMaterial({
         color: 0x6c5649,
-        metalness: 0.32,
-        roughness: 0.58,
-        emissive: 0x120e0c
+        metalness: 0.06,
+        roughness: 0.76,
+        emissive: 0x120e0c,
+        bumpMap: surfaceTexture,
+        bumpScale: 0.012
     });
     const jointMaterial = new THREE.MeshStandardMaterial({
         color: 0x443832,
-        metalness: 0.28,
-        roughness: 0.62,
+        metalness: 0.04,
+        roughness: 0.78,
         emissive: 0x100b09
     });
     const eyeMaterial = new THREE.MeshStandardMaterial({
@@ -201,8 +236,8 @@ try {
     });
     const fangMaterial = new THREE.MeshStandardMaterial({
         color: 0xb7a28c,
-        metalness: 0.22,
-        roughness: 0.34
+        metalness: 0.06,
+        roughness: 0.48
     });
     const tailGlowMaterial = new THREE.MeshStandardMaterial({
         color: 0x71321b,
@@ -218,28 +253,36 @@ try {
     });
     const skullMaterial = new THREE.MeshStandardMaterial({
         color: 0x382824,
-        metalness: 0.3,
-        roughness: 0.62,
-        emissive: 0x160706
+        metalness: 0.05,
+        roughness: 0.78,
+        emissive: 0x160706,
+        bumpMap: surfaceTexture,
+        bumpScale: 0.022
     });
     const fleshMaterial = new THREE.MeshStandardMaterial({
         color: 0x332321,
         metalness: 0.12,
-        roughness: 0.72
+        roughness: 0.78,
+        bumpMap: surfaceTexture,
+        bumpScale: 0.035
     });
     const armorMaterial = new THREE.MeshPhysicalMaterial({
         color: 0x34221f,
-        metalness: 0.43,
-        roughness: 0.48,
-        clearcoat: 0.32,
-        clearcoatRoughness: 0.38
+        metalness: 0.12,
+        roughness: 0.66,
+        clearcoat: 0.2,
+        clearcoatRoughness: 0.45,
+        bumpMap: surfaceTexture,
+        bumpScale: 0.018
     });
     const armorHighlightMaterial = new THREE.MeshPhysicalMaterial({
         color: 0x715347,
-        metalness: 0.48,
-        roughness: 0.42,
-        clearcoat: 0.42,
-        clearcoatRoughness: 0.3
+        metalness: 0.18,
+        roughness: 0.58,
+        clearcoat: 0.25,
+        clearcoatRoughness: 0.4,
+        bumpMap: surfaceTexture,
+        bumpScale: 0.018
     });
 
     scene.add(new THREE.HemisphereLight(0x9bbbd0, 0x11151a, 1.7));
@@ -408,7 +451,7 @@ try {
     const spineBones = Array.from({ length: ribCount - 1 }, () => makeBone(0.018));
     const spineJoints = spine.map(() => makeJoint(0.023));
     const bodySections = [];
-    const organicGeometry = new THREE.SphereGeometry(1, 12, 10);
+    const organicGeometry = new THREE.SphereGeometry(1, 16, 12);
     const armorGeometry = new THREE.IcosahedronGeometry(1, 1);
     const shieldShape = new THREE.Shape();
     shieldShape.moveTo(0.27, 0);
@@ -511,15 +554,14 @@ try {
     const head = new THREE.Group();
     creatureRoot.add(head);
     head.add(antennaLight);
-    const skull = new THREE.Mesh(new THREE.IcosahedronGeometry(0.35, 1), skullMaterial);
+    const skull = new THREE.Mesh(new THREE.SphereGeometry(0.35, 20, 14), skullMaterial);
     skull.position.set(0.19, 0.08, 0);
     skull.scale.set(1.45, 0.72, 0.82);
     skull.castShadow = true;
     head.add(skull);
-    const snout = new THREE.Mesh(new THREE.ConeGeometry(0.24, 0.72, 6), armorMaterial);
-    snout.position.set(0.42, 0.01, 0);
-    snout.rotation.z = -Math.PI / 2;
-    snout.scale.set(1, 0.78, 0.88);
+    const snout = new THREE.Mesh(new THREE.SphereGeometry(0.24, 20, 14), armorMaterial);
+    snout.position.set(0.45, 0.015, 0);
+    snout.scale.set(1.45, 0.72, 0.82);
     snout.castShadow = true;
     head.add(snout);
     const maw = new THREE.Mesh(new THREE.SphereGeometry(0.2, 12, 8), mawMaterial);
@@ -541,8 +583,8 @@ try {
 
     const eyeSockets = [];
     const eyes = [];
-    const eyeGeometry = new THREE.SphereGeometry(0.057, 14, 10);
-    const socketGeometry = new THREE.TorusGeometry(0.084, 0.022, 7, 16);
+    const eyeGeometry = new THREE.SphereGeometry(0.057, 18, 14);
+    const socketGeometry = new THREE.TorusGeometry(0.084, 0.022, 8, 24);
     const pupils = [];
     for (const side of [-1, 1]) {
         const socket = new THREE.Mesh(socketGeometry, armorMaterial);
@@ -559,6 +601,12 @@ try {
         pupil.scale.set(0.62, 1.5, 0.6);
         head.add(pupil);
         pupils.push(pupil);
+        const eyeGlint = new THREE.Mesh(
+            new THREE.SphereGeometry(0.009, 8, 8),
+            new THREE.MeshBasicMaterial({ color: 0xe6d7bd })
+        );
+        eyeGlint.position.set(0.276, 0.145, side * 0.321);
+        head.add(eyeGlint);
     }
     for (const side of [-1, 1]) {
         const smallerEye = new THREE.Mesh(
@@ -1008,16 +1056,16 @@ try {
             if (rib.crossbar) placeBone(rib.crossbar, tips[0], tips[1]);
         }
 
-        const legStride = 0.74;
+        const legStride = 0.52;
+        const stanceRatio = 0.68;
         for (const leg of legs) {
             const base = spine[leg.index];
             const before = spine[Math.max(0, leg.index - 1)];
             const after = spine[Math.min(spine.length - 1, leg.index + 1)];
             const tangent = before.clone().sub(after).setY(0).normalize();
             const sideAxis = new THREE.Vector3(-tangent.z, 0, tangent.x);
-            const cycle = ((gaitDistance / legStride + leg.pair * 0.18 + (leg.side > 0 ? 0.08 : 0)) % 1 + 1) % 1;
-            const stanceRatio = 0.66;
-            const stanceStride = legStride;
+            const cycle = ((gaitDistance / legStride + leg.pair * 0.14 + (leg.side > 0 ? 0.5 : 0)) % 1 + 1) % 1;
+            const stanceStride = legStride * stanceRatio;
             let step;
             let lift = 0;
             if (cycle < stanceRatio) {
@@ -1027,11 +1075,12 @@ try {
                 const progress = (cycle - stanceRatio) / (1 - stanceRatio);
                 const eased = progress * progress * (3 - 2 * progress);
                 step = (-0.5 + eased) * stanceStride;
-                lift = Math.sin(progress * Math.PI) * 0.28;
+                lift = Math.sin(progress * Math.PI) * 0.19;
             }
             const gaitBlend = Math.min(1, movementEnergy / 0.55);
             step *= gaitBlend;
             lift *= gaitBlend;
+            const groundY = -0.81 - creatureRoot.position.y;
             const hip = base.clone().add(new THREE.Vector3(0, 0.04, 0))
                 .addScaledVector(sideAxis, leg.side * 0.12);
             const coxaEnd = base.clone()
@@ -1040,11 +1089,11 @@ try {
                 .addScaledVector(sideAxis, leg.side * 0.27);
             const knee = base.clone()
                 .addScaledVector(tangent, step * 0.55 - 0.06)
-                .add(new THREE.Vector3(0, -0.29 + lift * 0.35, 0))
+                .add(new THREE.Vector3(0, -0.42 + lift * 0.3, 0))
                 .addScaledVector(sideAxis, leg.side * 0.43);
             const foot = base.clone()
                 .addScaledVector(tangent, step + 0.06)
-                .add(new THREE.Vector3(0, -0.79 + lift, 0))
+                .add(new THREE.Vector3(0, groundY - base.y + lift, 0))
                 .addScaledVector(sideAxis, leg.side * 0.58);
             placeBone(leg.coxa, hip, coxaEnd);
             placeBone(leg.upper, coxaEnd, knee);
