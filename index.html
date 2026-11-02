@@ -239,12 +239,6 @@ try {
         metalness: 0.06,
         roughness: 0.48
     });
-    const tailGlowMaterial = new THREE.MeshStandardMaterial({
-        color: 0x71321b,
-        emissive: 0xa84219,
-        emissiveIntensity: 0.58,
-        roughness: 0.38
-    });
     const antennaGlowMaterial = new THREE.MeshStandardMaterial({
         color: 0x8a5c38,
         emissive: 0xc37a3a,
@@ -522,35 +516,6 @@ try {
         }
     }
 
-    const tailCount = 16;
-    const tailPoints = Array.from({ length: tailCount + 1 }, (_, index) =>
-        new THREE.Vector3(2.25 - (ribCount - 1) * segmentSpacing - index * 0.105, 0.22, 0)
-    );
-    const tailBones = Array.from({ length: tailCount }, (_, index) =>
-        makeBone(0.014 * (1 - index / (tailCount + 2)))
-    );
-    const tailJoints = tailPoints.slice(0, -1).map((_, index) => makeJoint(0.02 * (1 - index / (tailCount + 2))));
-    const tailSections = Array.from({ length: tailCount - 2 }, (_, index) => {
-        const taper = 1 - (index + 1) / (tailCount + 1);
-        return {
-            index: index + 1,
-            flesh: makeOrganicMesh(organicGeometry, fleshMaterial, [0.09 * taper, 0.095 * taper, 0.15 * taper]),
-            plate: makeOrganicMesh(armorGeometry, armorMaterial, [0.095 * taper, 0.045 * taper, 0.15 * taper]),
-            spine: makeSpike(0.05 * taper)
-        };
-    });
-    const tailLanterns = [2, 4, 6, 8, 10, 12, 14].map(index => {
-        const taper = 1 - index / (tailCount + 1);
-        const lantern = new THREE.Mesh(
-            new THREE.SphereGeometry(Math.max(0.022, 0.058 * taper), 10, 8),
-            tailGlowMaterial
-        );
-        lantern.scale.set(1.25, 0.65, 1);
-        creatureRoot.add(lantern);
-        return { index, mesh: lantern };
-    });
-    const tailLight = new THREE.PointLight(0xc84c20, 1, 3.2, 2);
-    creatureRoot.add(tailLight);
     const head = new THREE.Group();
     creatureRoot.add(head);
     head.add(antennaLight);
@@ -1123,20 +1088,6 @@ try {
             });
         }
 
-        const tailDirection = spine[spine.length - 1].clone()
-            .sub(spine[spine.length - 2]).normalize();
-        const sideAxis = new THREE.Vector3(-tailDirection.z, 0, tailDirection.x);
-        tailPoints[0].copy(spine[spine.length - 1]);
-        for (let index = 1; index < tailPoints.length; index++) {
-            const wave = reducedMotion
-                ? 0
-                : Math.sin(gaitDistance * 3.2 - index * 0.38) * 0.11 * movementEnergy
-                    + Math.sin(time * 0.001 - index * 0.24) * 0.025;
-            const direction = tailDirection.clone().addScaledVector(sideAxis, wave).normalize();
-            tailPoints[index].copy(tailPoints[index - 1]).addScaledVector(direction, index < 10 ? 0.105 : 0.09);
-            placeBone(tailBones[index - 1], tailPoints[index - 1], tailPoints[index]);
-            if (tailJoints[index - 1]) tailJoints[index - 1].position.copy(tailPoints[index - 1]);
-        }
         const spineLightStart = 6;
         const spineLightEnd = spine.length - 5;
         const spineLightSegments = spineLightEnd - spineLightStart;
@@ -1150,30 +1101,6 @@ try {
             section.dorsal.material.emissive.setHex(0xb94f1e);
             section.dorsal.material.emissiveIntensity = 0.025 + glow * 0.62;
         }
-        for (const lantern of tailLanterns) {
-            lantern.mesh.position.copy(tailPoints[lantern.index]);
-            lantern.mesh.position.y += 0.035 * (1 - lantern.index / (tailCount + 1));
-        }
-        tailLight.position.copy(tailPoints[tailCount]);
-        tailLight.position.y += 0.06;
-        tailGlowMaterial.emissiveIntensity = 0.52
-            + (reducedMotion ? 0 : Math.sin(time * 0.002) * 0.08);
-        for (const section of tailSections) {
-            const base = tailPoints[section.index];
-            const tangent = tailPoints[section.index - 1].clone().sub(tailPoints[section.index + 1]).normalize();
-            const taper = 1 - section.index / (tailCount + 1);
-            const yaw = Math.atan2(-tangent.z, tangent.x);
-            section.flesh.position.copy(base);
-            section.flesh.rotation.y = yaw;
-            section.plate.position.copy(base).add(new THREE.Vector3(0, 0.035 * taper, 0));
-            section.plate.rotation.y = yaw;
-            const spikeBase = base.clone().add(new THREE.Vector3(0, 0.055 * taper, 0));
-            const spikeTip = spikeBase.clone()
-                .addScaledVector(tangent, -0.09 * taper)
-                .add(new THREE.Vector3(0, 0.21 * taper, 0));
-            placeBone(section.spine, spikeBase, spikeTip);
-        }
-
         const idleFor = performance.now() - lastPointerMove;
         const isIdle = !pointerSeen || idleFor > 1200;
         if (!reducedMotion && isIdle && time >= nextCuriosityAt) {
