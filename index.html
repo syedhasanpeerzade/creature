@@ -516,6 +516,27 @@ try {
         }
     }
 
+    const tailBaseIndex = ribCount - 4;
+    const tailCount = 12;
+    const tailPoints = Array.from({ length: tailCount + 1 }, (_, index) =>
+        new THREE.Vector3(
+            spine[tailBaseIndex].x - index * segmentSpacing,
+            spine[tailBaseIndex].y,
+            spine[tailBaseIndex].z
+        )
+    );
+    const tailBones = Array.from({ length: tailCount }, (_, index) =>
+        makeBone(0.014 * (1 - index / (tailCount + 2)))
+    );
+    const tailJoints = tailPoints.slice(0, -1).map((_, index) => makeJoint(0.018 * (1 - index / (tailCount + 2))));
+    const tailSections = Array.from({ length: tailCount }, (_, index) => {
+        return {
+            index: index + 1,
+            flesh: makeOrganicMesh(organicGeometry, fleshMaterial, [0.17, 0.11, 0.2]),
+            dorsal: makeOrganicMesh(armorGeometry, armorHighlightMaterial, [0.17, 0.065, 0.21]),
+            spine: makeSpike(0.07)
+        };
+    });
     const head = new THREE.Group();
     creatureRoot.add(head);
     head.add(antennaLight);
@@ -1101,6 +1122,49 @@ try {
             section.dorsal.material.emissive.setHex(0xb94f1e);
             section.dorsal.material.emissiveIntensity = 0.025 + glow * 0.62;
         }
+        const tailHeading = spine[spine.length - 1].clone()
+            .sub(spine[spine.length - 2]).normalize();
+        const tailSide = new THREE.Vector3(-tailHeading.z, 0, tailHeading.x);
+        tailPoints[0].copy(spine[tailBaseIndex]);
+        for (let index = 1; index <= tailCount; index++) {
+            if (tailBaseIndex + index < spine.length) {
+                tailPoints[index].copy(spine[tailBaseIndex + index]);
+            } else {
+                const tailIndex = index - (spine.length - tailBaseIndex - 1);
+                const wave = reducedMotion
+                    ? 0
+                    : Math.sin(gaitDistance * 2.8 - tailIndex * 0.42) * 0.075 * movementEnergy
+                        + Math.sin(time * 0.0012 - tailIndex * 0.2) * 0.01;
+                const direction = tailHeading.clone().addScaledVector(tailSide, wave).normalize();
+                tailPoints[index].copy(tailPoints[index - 1]).addScaledVector(direction, segmentSpacing);
+            }
+            if (index <= tailCount) {
+                placeBone(tailBones[index - 1], tailPoints[index - 1], tailPoints[index]);
+                tailJoints[index - 1].position.copy(tailPoints[index - 1]);
+            }
+        }
+        for (const section of tailSections) {
+            const base = tailPoints[section.index];
+            const before = tailPoints[Math.max(0, section.index - 1)];
+            const after = tailPoints[Math.min(tailCount, section.index + 1)];
+            const tangent = before.clone().sub(after).setY(0).normalize();
+            const progress = section.index / tailCount;
+            const taper = Math.pow(1 - progress, 0.8);
+            const yaw = Math.atan2(-tangent.z, tangent.x);
+            section.flesh.position.copy(base);
+            section.flesh.position.y -= 0.09;
+            section.flesh.rotation.y = yaw;
+            section.flesh.scale.set(0.17 * taper, 0.11 * taper, 0.2 * taper);
+            section.dorsal.position.copy(base).add(new THREE.Vector3(0, 0.075 * taper, 0));
+            section.dorsal.rotation.y = yaw;
+            section.dorsal.scale.set(0.17 * taper, 0.065 * taper, 0.21 * taper);
+            const spineBase = base.clone().add(new THREE.Vector3(0, 0.1 * taper, 0));
+            const spineTip = spineBase.clone()
+                .addScaledVector(tangent, -0.035 * taper)
+                .add(new THREE.Vector3(0, 0.12 * taper, 0));
+            placeBone(section.spine, spineBase, spineTip);
+        }
+
         const idleFor = performance.now() - lastPointerMove;
         const isIdle = !pointerSeen || idleFor > 1200;
         if (!reducedMotion && isIdle && time >= nextCuriosityAt) {
