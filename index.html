@@ -356,7 +356,7 @@ try {
     let sniffDuration = 1;
     let nextBiteAt = 0;
     let biteStartedAt = -10000;
-    const biteDuration = 440;
+    let biteDuration = 620;
 
     function makeBone(radius = 0.022, material = boneMaterial) {
         const mesh = new THREE.Mesh(
@@ -540,6 +540,9 @@ try {
     const head = new THREE.Group();
     creatureRoot.add(head);
     head.add(antennaLight);
+    const lowerJaw = new THREE.Group();
+    lowerJaw.position.set(0.02, -0.11, 0);
+    head.add(lowerJaw);
     const skull = new THREE.Mesh(new THREE.SphereGeometry(0.35, 20, 14), skullMaterial);
     skull.position.set(0.19, 0.08, 0);
     skull.scale.set(1.45, 0.72, 0.82);
@@ -554,6 +557,11 @@ try {
     maw.position.set(0.39, -0.125, 0);
     maw.scale.set(1.55, 0.46, 0.8);
     head.add(maw);
+    const mandible = new THREE.Mesh(new THREE.SphereGeometry(0.2, 16, 10), armorMaterial);
+    mandible.position.set(0.28, -0.065, 0);
+    mandible.scale.set(1.45, 0.42, 0.82);
+    mandible.castShadow = true;
+    lowerJaw.add(mandible);
     const browPlates = [
         [0.22, 0.29, 0, [0.32, 0.075, 0.23]],
         [0.39, 0.19, -0.18, [0.2, 0.08, 0.11]],
@@ -610,15 +618,13 @@ try {
         makeHeadSpike(new THREE.Vector3(0.08, -0.11, -0.2), new THREE.Vector3(0.57, -0.35, -0.31), 0.08),
         makeHeadSpike(new THREE.Vector3(0.08, -0.11, 0.2), new THREE.Vector3(0.57, -0.35, 0.31), 0.08)
     ];
-    const fangs = [
+    [
         [-1, 0.26], [-1, 0.43], [1, 0.26], [1, 0.43]
-    ].map(([side, x]) => {
+    ].forEach(([side, x]) => {
         const fang = new THREE.Mesh(new THREE.ConeGeometry(0.036, 0.18, 7), fangMaterial);
-        fang.position.set(x, -0.16, side * 0.13);
-        fang.rotation.z = Math.PI;
+        fang.position.set(x - lowerJaw.position.x, -0.035, side * 0.13);
         fang.castShadow = true;
-        head.add(fang);
-        return fang;
+        lowerJaw.add(fang);
     });
 
     const headBones = [
@@ -653,7 +659,8 @@ try {
         head.add(arc);
         return { phase: index * 2.1 + Math.random() * 3.2, arc };
     });
-    head.add(...headBones, ...headJoints, ...antennaBones, ...antennaJoints);
+    lowerJaw.add(...headBones.slice(0, 6), ...headJoints);
+    head.add(...headBones.slice(6), ...antennaBones, ...antennaJoints);
 
     let headLookYaw = 0;
     let nextAntennaBurstAt = performance.now() + 1800 + Math.random() * 1800;
@@ -694,7 +701,7 @@ try {
         });
     }
 
-    function setHeadPose(time, blink, deltaSeconds, breath, bite) {
+    function setHeadPose(time, blink, deltaSeconds, breath, jawOpen, biteLunge) {
         head.position.copy(spine[0]);
         const sniffProgress = Math.max(0, Math.min(1, (time - sniffStartedAt) / sniffDuration));
         const sniff = Math.sin(sniffProgress * Math.PI);
@@ -702,7 +709,7 @@ try {
             + breath * 0.004 - sniff * 0.02;
         headForward.copy(spine[0]).sub(spine[1]).setY(0).normalize();
         head.quaternion.setFromUnitVectors(forwardAxis, headForward);
-        head.position.addScaledVector(headForward, bite * 0.28);
+        head.position.addScaledVector(headForward, biteLunge);
         const targetAngle = Math.atan2(cursorWorld.z - spine[0].z, cursorWorld.x - spine[0].x);
         const headingAngle = Math.atan2(headForward.z, headForward.x);
         const angleDifference = Math.atan2(
@@ -725,15 +732,15 @@ try {
                 Math.sin(time * 0.0017) * 0.008
             ));
         }
-        const jawPulse = reducedMotion ? 0 : Math.sin(time * 0.0015) * 0.009 + sniff * 0.012 + bite * 0.075;
-        maw.scale.y = 0.46 + bite * 0.28;
-        maw.position.y = -0.125 - bite * 0.035;
-        const jawLeftHinge = new THREE.Vector3(0.02, -0.11, -0.18);
-        const jawRightHinge = new THREE.Vector3(0.02, -0.11, 0.18);
-        const jawLeftFront = new THREE.Vector3(0.57, -0.12 - jawPulse, -0.12);
-        const jawRightFront = new THREE.Vector3(0.57, -0.12 - jawPulse, 0.12);
-        const jawLeftBack = new THREE.Vector3(0.08, -0.24 - jawPulse, -0.18);
-        const jawRightBack = new THREE.Vector3(0.08, -0.24 - jawPulse, 0.18);
+        lowerJaw.rotation.z = -jawOpen * 0.62;
+        maw.scale.y = 0.46 + jawOpen * 0.14;
+        maw.position.y = -0.125 - jawOpen * 0.012;
+        const jawLeftHinge = new THREE.Vector3(0, 0, -0.18);
+        const jawRightHinge = new THREE.Vector3(0, 0, 0.18);
+        const jawLeftFront = new THREE.Vector3(0.55, -0.03, -0.12);
+        const jawRightFront = new THREE.Vector3(0.55, -0.03, 0.12);
+        const jawLeftBack = new THREE.Vector3(0.06, -0.14, -0.18);
+        const jawRightBack = new THREE.Vector3(0.06, -0.14, 0.18);
         const headPairs = [
             [jawLeftHinge, jawLeftFront], [jawRightHinge, jawRightFront],
             [jawLeftFront, jawLeftBack], [jawRightFront, jawRightBack],
@@ -746,7 +753,7 @@ try {
             placeBone(
                 headBones[6 + tooth],
                 new THREE.Vector3(x, -0.015, tooth === 0 ? -0.12 : 0.12),
-                new THREE.Vector3(x + 0.015, -0.105 - jawPulse, tooth === 0 ? -0.11 : 0.11)
+                new THREE.Vector3(x + 0.015, -0.105, tooth === 0 ? -0.11 : 0.11)
             );
         }
         const joints = [jawLeftHinge, jawRightHinge, jawLeftFront, jawRightFront, jawLeftBack, jawRightBack];
@@ -756,9 +763,6 @@ try {
         });
         eyes.forEach(eye => eye.scale.y = 1 - blink * 0.82);
         pupils.forEach(pupil => pupil.scale.y = 1 - blink * 0.82);
-        fangs.forEach(fang => {
-            fang.position.y = -0.16 - jawPulse;
-        });
 
         const wave = reducedMotion
             ? 0
@@ -1187,14 +1191,35 @@ try {
         const cursorDistance = Math.hypot(cursorWorld.x - spine[0].x, cursorWorld.z - spine[0].z);
         if (!reducedMotion && pointerSeen && cursorDistance < 1.8 && time >= nextBiteAt) {
             biteStartedAt = time;
-            nextBiteAt = time + 850;
+            biteDuration = 520 + Math.random() * 180;
+            nextBiteAt = time + biteDuration + 1500 + Math.random() * 1500;
         }
         const biteProgress = (time - biteStartedAt) / biteDuration;
-        const bite = !reducedMotion && biteProgress >= 0 && biteProgress <= 1
-            ? Math.sin(biteProgress * Math.PI)
-            : 0;
-        setHeadPose(time, blink, deltaSeconds, breath, bite);
-        stateLabel.textContent = bite > 0.3
+        let jawOpen = 0;
+        let biteLunge = 0;
+        if (!reducedMotion && biteProgress >= 0 && biteProgress <= 1) {
+            const anticipation = Math.max(0, Math.min(1, biteProgress / 0.34));
+            const anticipationEase = anticipation * anticipation * (3 - 2 * anticipation);
+            const snap = Math.max(0, Math.min(1, (biteProgress - 0.34) / 0.14));
+            const snapEase = snap * snap * (3 - 2 * snap);
+            if (biteProgress < 0.34) {
+                jawOpen = anticipationEase;
+                biteLunge = -0.045 * anticipationEase;
+            } else if (biteProgress < 0.48) {
+                jawOpen = 1 - snapEase;
+                biteLunge = -0.045 + 0.23 * snapEase;
+            } else if (biteProgress < 0.68) {
+                const recoil = (biteProgress - 0.48) / 0.2;
+                const recoilEase = recoil * recoil * (3 - 2 * recoil);
+                biteLunge = 0.185 * (1 - recoilEase);
+                jawOpen = Math.sin(recoil * Math.PI) * 0.06;
+            } else {
+                const recovery = Math.min(1, (biteProgress - 0.68) / 0.32);
+                biteLunge = 0.045 * (1 - recovery * recovery * (3 - 2 * recovery));
+            }
+        }
+        setHeadPose(time, blink, deltaSeconds, breath, jawOpen, biteLunge);
+        stateLabel.textContent = jawOpen > 0.3 || biteLunge > 0.07
             ? "Trying to eat the cursor"
             : !pointerSeen
             ? "Waiting for you"
