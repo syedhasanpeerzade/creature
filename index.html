@@ -497,7 +497,7 @@ try {
         crossbar: ribIndex % 3 === 0 ? makeBone(0.008) : null
     }));
 
-    const legsAt = Array.from({ length: 31 }, (_, pair) => 5 + Math.round(pair * 1.25));
+    const legsAt = Array.from({ length: 25 }, (_, pair) => 5 + Math.round(pair * 1.55));
     const legs = [];
     for (let pair = 0; pair < legsAt.length; pair++) {
         for (const side of [-1, 1]) {
@@ -1066,7 +1066,7 @@ try {
             const after = spine[Math.min(spine.length - 1, leg.index + 1)];
             const tangent = before.clone().sub(after).setY(0).normalize();
             const sideAxis = new THREE.Vector3(-tangent.z, 0, tangent.x);
-            const cycle = ((gaitDistance / legStride + leg.pair * 0.09 + (leg.side > 0 ? 0.5 : 0)) % 1 + 1) % 1;
+            const cycle = ((gaitDistance / legStride + leg.pair * 0.11 + (leg.side > 0 ? 0.5 : 0)) % 1 + 1) % 1;
             const stanceStride = legStride * stanceRatio;
             let step;
             let lift = 0;
