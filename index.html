@@ -663,6 +663,9 @@ try {
     head.add(...headBones.slice(6), ...antennaBones, ...antennaJoints);
 
     let headLookYaw = 0;
+    let headLookYawVelocity = 0;
+    let previousHeadHeadingAngle = 0;
+    let headTurnLean = 0;
     let nextAntennaBurstAt = performance.now() + 1800 + Math.random() * 1800;
     let antennaBurstStartedAt = -Infinity;
     let antennaBurstDuration = 180;
@@ -717,10 +720,26 @@ try {
             Math.cos(targetAngle - headingAngle)
         );
         const desiredLookYaw = pointerSeen ? Math.max(-0.48, Math.min(0.48, -angleDifference)) : 0;
-        headLookYaw += (desiredLookYaw - headLookYaw) * (1 - Math.exp(-6.5 * deltaSeconds));
+        headLookYawVelocity += (
+            (desiredLookYaw - headLookYaw) * 36 - headLookYawVelocity * 12
+        ) * deltaSeconds;
+        headLookYaw += headLookYawVelocity * deltaSeconds;
+        if (headLookYaw < -0.48 || headLookYaw > 0.48) {
+            headLookYaw = Math.max(-0.48, Math.min(0.48, headLookYaw));
+            headLookYawVelocity = 0;
+        }
+        const headingTurn = Math.atan2(
+            Math.sin(headingAngle - previousHeadHeadingAngle),
+            Math.cos(headingAngle - previousHeadHeadingAngle)
+        ) / Math.max(deltaSeconds, 0.001);
+        previousHeadHeadingAngle = headingAngle;
+        const desiredTurnLean = reducedMotion
+            ? 0
+            : Math.max(-0.09, Math.min(0.09, -headingTurn * 0.035));
+        headTurnLean += (desiredTurnLean - headTurnLean) * (1 - Math.exp(-7 * deltaSeconds));
         const curiosityProgress = Math.max(0, Math.min(1, (time - curiosityStartedAt) / curiosityDuration));
         const curiosity = Math.sin(curiosityProgress * Math.PI);
-        const tilt = reducedMotion ? 0 : curiosity * curiosityTilt;
+        const tilt = (reducedMotion ? 0 : curiosity * curiosityTilt) + headTurnLean;
         const gaitPhase = gaitDistance / strideLength * Math.PI * 2;
         const nod = reducedMotion ? 0 : Math.sin(gaitPhase) * 0.025 * movementEnergy;
         head.quaternion.multiply(headRotation.setFromAxisAngle(yawAxis, headLookYaw));
